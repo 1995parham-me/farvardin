@@ -204,6 +204,8 @@ func TestHandlerNeedsToken(t *testing.T) {
 		want int
 	}{{"", http.StatusUnauthorized}, {"Bearer fv_wrong", http.StatusUnauthorized}, {"Bearer " + token, http.StatusOK}} {
 		req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, srv.URL, strings.NewReader(body))
+		// As behind nginx: the public name, on a loopback listener.
+		req.Host = "davx.example.com"
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Accept", "application/json, text/event-stream")
 

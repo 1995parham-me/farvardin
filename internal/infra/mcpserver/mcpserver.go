@@ -69,7 +69,13 @@ func Handler(b Backend, tokens map[string]string) http.Handler {
 	t := tools{b: b}
 	t.register(server)
 
-	h := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, &mcp.StreamableHTTPOptions{Stateless: true}) //nolint:exhaustruct // stateless: no sessions to keep
+	// Stateless: no sessions to keep. The SDK's DNS-rebinding guard only
+	// lets localhost Host headers through when listening on loopback, but
+	// farvardin sits behind a reverse proxy that passes the public name; a
+	// rebinding page could reach the port but never present the bearer
+	// token every request needs, so the guard adds nothing here.
+	//nolint:exhaustruct // the two options that matter
+	h := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, &mcp.StreamableHTTPOptions{Stateless: true, DisableLocalhostProtection: true})
 
 	verify := func(_ context.Context, token string, _ *http.Request) (*auth.TokenInfo, error) {
 		sum := sha256.Sum256([]byte(token))
