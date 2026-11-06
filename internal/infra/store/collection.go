@@ -16,7 +16,6 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/format/index"
 	"github.com/go-git/go-git/v5/plumbing/object"
-	"github.com/go-git/go-git/v5/plumbing/storer"
 	"github.com/go-git/go-git/v5/storage"
 )
 
@@ -73,6 +72,7 @@ type Collection struct {
 
 	mu   sync.Mutex
 	last *Snapshot
+	hist history
 }
 
 func openCollection(dir, name string, kind Kind, author Author) (*Collection, error) {
@@ -81,7 +81,7 @@ func openCollection(dir, name string, kind Kind, author Author) (*Collection, er
 		return nil, fmt.Errorf("%w: %s: %w", ErrCollectionDir, dir, err)
 	}
 
-	return &Collection{dir: dir, name: name, kind: kind, author: author, repo: repo, mu: sync.Mutex{}, last: nil}, nil
+	return &Collection{dir: dir, name: name, kind: kind, author: author, repo: repo, mu: sync.Mutex{}, last: nil, hist: history{mu: sync.Mutex{}, upTo: plumbing.ZeroHash, byName: nil}}, nil
 }
 
 // Dir returns the collection's directory.
@@ -590,90 +590,6 @@ type Revision struct {
 	Requester string
 	// ETag is the object's blob id after the commit; "" if it was deleted.
 	ETag string
-}
-
-// History returns up to limit commits that changed name, newest first.
-func (c *Collection) History(name string, limit int) ([]Revision, error) {
-	head, err := c.head()
-	if err != nil || head == nil {
-		return nil, err
-	}
-
-	//nolint:exhaustruct // only the start and the path filter are needed
-	iter, err := c.repo.Log(&git.LogOptions{From: head.Hash(), FileName: &name})
-	if err != nil {
-		return nil, fmt.Errorf("reading history: %w", err)
-	}
-	defer iter.Close()
-
-	var out []Revision
-
-	err = iter.ForEach(func(cm *object.Commit) error {
-		subject, body, _ := strings.Cut(cm.Message, "\n")
-		rev := Revision{Commit: cm.Hash.String(), When: cm.Author.When, Message: subject, Requester: "", ETag: ""}
-
-		for line := range strings.SplitSeq(body, "\n") {
-			if r, ok := strings.CutPrefix(line, "Requester: "); ok {
-				rev.Requester = r
-			}
-		}
-
-		if f, err := cm.File(name); err == nil {
-			rev.ETag = f.Hash.String()
-		}
-
-		out = append(out, rev)
-		if len(out) >= limit {
-			return storer.ErrStop
-		}
-
-		return nil
-	})
-	if err != nil {
-		return out, fmt.Errorf("reading history: %w", err)
-	}
-
-	return out, nil
-}
-
-// Recent returns the newest commits of the collection.
-func (c *Collection) Recent(limit int) ([]Revision, error) {
-	head, err := c.head()
-	if err != nil || head == nil {
-		return nil, err
-	}
-
-	//nolint:exhaustruct // only the start is needed
-	iter, err := c.repo.Log(&git.LogOptions{From: head.Hash()})
-	if err != nil {
-		return nil, fmt.Errorf("reading history: %w", err)
-	}
-	defer iter.Close()
-
-	var out []Revision
-
-	err = iter.ForEach(func(cm *object.Commit) error {
-		subject, body, _ := strings.Cut(cm.Message, "\n")
-		rev := Revision{Commit: cm.Hash.String(), When: cm.Author.When, Message: subject, Requester: "", ETag: ""}
-
-		for line := range strings.SplitSeq(body, "\n") {
-			if r, ok := strings.CutPrefix(line, "Requester: "); ok {
-				rev.Requester = r
-			}
-		}
-
-		out = append(out, rev)
-		if len(out) >= limit {
-			return storer.ErrStop
-		}
-
-		return nil
-	})
-	if err != nil {
-		return out, fmt.Errorf("reading history: %w", err)
-	}
-
-	return out, nil
 }
 
 // SnapshotAt returns the objects at an earlier sync token.

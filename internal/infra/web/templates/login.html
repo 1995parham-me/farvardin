@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#282826">
+<title>Sign in · Farvardin</title>
+<link rel="stylesheet" href="{{asset "style.css"}}">
+<link rel="icon" href="{{asset "icon.svg"}}" type="image/svg+xml">
+</head>
+<body class="login-page">
+<main class="login">
+  <img class="login-logo" src="{{asset "icon.svg"}}" alt="" width="64" height="64">
+  <h1>farvardin</h1>
+  <p class="muted">Contacts and calendars, kept in git.</p>
+  <form method="post" action="{{ui "/login"}}" class="card login-form">
+    <input type="hidden" name="next" value="{{.Next}}">
+    {{if .Error}}<p class="flash bad" role="alert">{{template "icon" "alert"}}{{.Error}}</p>{{end}}
+    <label>User name<input name="username" value="{{.Username}}" autocomplete="username" autocapitalize="none" spellcheck="false" required {{if not .Username}}autofocus{{end}}></label>
+    <label>Password<input name="password" type="password" autocomplete="current-password" required {{if .Username}}autofocus{{end}}></label>
+    <button class="primary" type="submit">Sign in</button>
+  </form>
+</main>
+</body>
+</html>

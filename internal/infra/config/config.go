@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/knadh/koanf/parsers/toml/v2"
 	"github.com/knadh/koanf/providers/env/v2"
@@ -24,7 +25,24 @@ type Config struct {
 	Contacts  Contacts  `json:"contacts"  koanf:"contacts"`
 	Calendars Calendars `json:"calendars" koanf:"calendars"`
 	Push      Push      `json:"push"      koanf:"push"`
+	UI        UI        `json:"ui"        koanf:"ui"`
 	Log       Log       `json:"log"       koanf:"log"`
+}
+
+// UI configures the web UI's own login.
+type UI struct {
+	// Auth is "proxy" (the [auth] mode, or a proxy in front, guards /ui
+	// like the DAV tree) or "jwt" (a login page and a signed session cookie).
+	Auth string `json:"auth" koanf:"auth"`
+	// Users maps user names to bcrypt hashes for "jwt".
+	Users map[string]string `json:"-" koanf:"users"`
+	// SessionTTL is how long a login lasts.
+	SessionTTL time.Duration `json:"session_ttl" koanf:"session_ttl"`
+	// SecretFile holds the session signing key; created when missing.
+	SecretFile string `json:"secret_file" koanf:"secret_file"`
+	// SecureCookie sends the cookie over HTTPS only. Turn it off only for
+	// plain-HTTP testing.
+	SecureCookie bool `json:"secure_cookie" koanf:"secure_cookie"`
 }
 
 // Push configures WebDAV-Push.
@@ -107,6 +125,7 @@ func Default() Config {
 		},
 		Calendars: Calendars{Birthdays: true, BirthdayAlarmDays: 0, BirthdayColor: "#FF2D55", UserAddress: ""},
 		Push:      Push{Enabled: false, StateDir: "/var/lib/farvardin/state", Subject: "mailto:farvardin@localhost"},
+		UI:        UI{Auth: "proxy", Users: nil, SessionTTL: 7 * 24 * time.Hour, SecretFile: "/var/lib/farvardin/ui-session.key", SecureCookie: true}, //nolint:gosec // a file path, not a credential
 		Log:       Log{Level: "info", Format: "text"},
 	}
 }
@@ -165,6 +184,16 @@ func (c Config) Validate() error {
 
 	if c.Store.Principal == "" || strings.ContainsAny(c.Store.Principal, "/.") || c.Store.Principal == "ui" || c.Store.Principal == "metrics" {
 		return fmt.Errorf("%w: store.principal %q is not usable", ErrInvalid, c.Store.Principal)
+	}
+
+	switch c.UI.Auth {
+	case "proxy":
+	case "jwt":
+		if len(c.UI.Users) == 0 {
+			return fmt.Errorf("%w: ui.auth = jwt needs at least one [ui.users] entry", ErrInvalid)
+		}
+	default:
+		return fmt.Errorf("%w: ui.auth must be proxy or jwt, not %q", ErrInvalid, c.UI.Auth)
 	}
 
 	if c.Store.Root == "" {

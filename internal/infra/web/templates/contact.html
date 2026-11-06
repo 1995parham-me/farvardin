@@ -1,40 +1,61 @@
 {{template "head" .}}
 <article class="contact">
-  <div class="hero">
-    {{if .HasPhoto}}<a href="{{ui "/photo/"}}{{.Book}}/{{.File}}"><img class="photo" src="{{ui "/photo/"}}{{.Book}}/{{.File}}?s=320" alt=""></a>{{else}}<span class="photo avatar h{{hue .Title}}">{{initials .Title}}</span>{{end}}
-    <div>
+  <header class="hero">
+    {{if .HasPhoto}}<a class="photo-link" href="{{ui "/photo/"}}{{.Book}}/{{.File}}"><img class="photo" src="{{ui "/photo/"}}{{.Book}}/{{.File}}?s=320&amp;v={{.Object.ETag}}" alt="" width="148" height="148"></a>{{else}}<span class="photo avatar h{{hue .Title}}">{{initials .Title}}</span>{{end}}
+    <div class="grow">
       <h1 dir="auto">{{.Title}}</h1>
-      <p class="muted">vCard {{.Version}} · {{.File}} · {{kib .Object.Size}}{{if .PhotoInfo}} · photo {{.PhotoInfo}}{{end}}</p>
-      <p class="actions">
-        <a class="button" href="{{.Raw}}" download>vCard</a>
-        <a class="button" href="{{.Raw}}?format=3.0" download>3.0</a>
-        <a class="button" href="{{.Raw}}?format=4.0" download>4.0</a>
-        <a class="button" href="{{.Raw}}?format=jscontact">JSContact</a>
-      </p>
+      {{if or .Org .JobTitle}}<p class="org" dir="auto">{{.JobTitle}}{{if and .Org .JobTitle}} · {{end}}{{.Org}}</p>{{end}}
+      <p class="meta mono">vCard {{.Version}} · {{kib .Object.Size}}{{if .PhotoInfo}} · photo {{.PhotoInfo}}{{end}}</p>
+      <div class="actions">
+        {{range .Fields}}{{if eq .Kind "phone"}}<a class="button primary" href="{{.Link}}">{{template "icon" "phone"}}Call</a>{{break}}{{end}}{{end}}
+        {{range .Fields}}{{if eq .Kind "email"}}<a class="button" href="{{.Link}}">{{template "icon" "mail"}}Email</a>{{break}}{{end}}{{end}}
+        <details class="menu"><summary class="button">{{template "icon" "download"}}Download</summary>
+          <div><a href="{{.Raw}}" download>As stored</a><a href="{{.Raw}}?format=3.0" download>vCard 3.0</a><a href="{{.Raw}}?format=4.0" download>vCard 4.0</a><a href="{{.Raw}}?format=jscontact">JSContact</a></div>
+        </details>
+      </div>
     </div>
+  </header>
+
+  {{if .Restored}}<p class="flash good" role="status">{{template "icon" "check"}}Photo restored. The phones get it on their next sync, pushed right away.</p>{{end}}
+  {{if .Failed}}<p class="flash bad" role="alert">{{template "icon" "alert"}}{{.Failed}}</p>{{end}}
+  {{if .Issues}}<ul class="issues">{{range .Issues}}<li class="{{.Severity}}">{{template "icon" "alert"}}{{.Message}}</li>{{end}}</ul>{{end}}
+
+  <div class="grid2 wide">
+    <section class="panel">
+      <h2>Details</h2>
+      {{if .Fields}}
+      <dl class="fields">
+        {{range .Fields}}
+        <div><dt>{{.Label}}</dt><dd dir="auto">{{if .Link}}<a href="{{.Link}}">{{.Value}}</a>{{else}}{{.Value}}{{end}}{{if .Copy}}<button class="ghost copy" type="button" data-copy="{{.Value}}" title="Copy">{{template "icon" "copy"}}</button>{{end}}</dd></div>
+        {{end}}
+      </dl>
+      {{else}}<p class="empty">No details on this card.</p>{{end}}
+    </section>
+
+    <section class="panel" id="photos">
+      <h2>{{template "icon" "photo"}}Photo history</h2>
+      {{if .Photos}}
+      <ul class="photos">
+        {{range .Photos}}
+        <li class="{{if .Current}}current{{end}}">
+          <img src="{{ui "/photo/"}}{{$.Book}}/{{$.File}}?s=160&amp;rev={{.ETag}}" alt="" width="80" height="80" loading="lazy">
+          <div class="grow"><span class="mono {{if le .Width 128}}orange{{else}}green{{end}}">{{.Width}}×{{.Height}}</span><span class="muted">since {{day .Since}} · {{.Device}}</span></div>
+          {{if .Current}}<span class="chip on">current</span>
+          {{else if $.CanWrite}}<form method="post" action="{{$.File}}/photo"><input type="hidden" name="from" value="{{.ETag}}"><input type="hidden" name="if_match" value="{{$.Object.ETag}}"><button class="button {{if .Better}}primary{{end}}" type="submit">{{template "icon" "restore"}}Restore</button></form>{{end}}
+        </li>
+        {{end}}
+      </ul>
+      {{else}}<p class="empty">This card has never had a photo.</p>{{end}}
+    </section>
   </div>
 
-  {{if .Issues}}
-  <ul class="issues">{{range .Issues}}<li class="{{.Severity}}">{{.Severity}}: {{.Message}}</li>{{end}}</ul>
-  {{end}}
-
-  <dl class="fields">
-    {{range .Fields}}
-    <dt>{{.Label}}</dt>
-    <dd dir="auto">{{if .Link}}<a href="{{.Link}}">{{.Value}}</a>{{else}}{{.Value}}{{end}}</dd>
-    {{end}}
-  </dl>
-
-  <h2>History</h2>
-  <ul class="list">
-    {{range .History}}
-    <li><div><span>{{.Message}} <code>{{short .Commit}}</code></span><span class="muted">{{datetime .When}}{{if .Requester}} · {{.Requester}}{{end}}</span></div></li>
-    {{end}}
-  </ul>
-
-  <details>
-    <summary>JSContact (RFC 9553)</summary>
-    <pre>{{.JSContact}}</pre>
-  </details>
+  <section class="panel">
+    <h2>{{template "icon" "clock"}}History</h2>
+    <ol class="list timeline">
+      {{range .Timeline}}
+      <li><span class="dot {{.Kind}}"></span><div class="grow"><span>{{.Summary}}</span><span class="muted">{{.Device}} · <code>{{short .Rev.Commit}}</code></span></div><span class="muted mono" title="{{datetime .Rev.When}}">{{ago .Rev.When}}</span></li>
+      {{end}}
+    </ol>
+  </section>
 </article>
 {{template "foot" .}}

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"image"
 	"image/jpeg"
+	"strconv"
 	"strings"
 
 	// Register the decoders contact clients use.
@@ -285,4 +286,59 @@ func (p Photo) Thumbnail(size int) ([]byte, string, error) {
 	}
 
 	return data, "image/jpeg", nil
+}
+
+// photoLines are the properties that describe a card's photo.
+var photoLines = map[string]bool{"PHOTO": true, "X-IMAGEHASH": true, "X-IMAGETYPE": true}
+
+// WithPhotoOf returns cur with its photo replaced by the photo of from
+// (PHOTO plus Apple's X-IMAGEHASH and X-IMAGETYPE), in the place cur's
+// photo was, or before END:VCARD. Every other line keeps its bytes.
+func WithPhotoOf(cur, from Card) Card {
+	var photo []vcf.Line
+
+	for _, l := range from.Lines {
+		if photoLines[l.Name] {
+			photo = append(photo, l)
+		}
+	}
+
+	out := Card{Lines: make([]vcf.Line, 0, len(cur.Lines)+len(photo))}
+	placed := false
+
+	for _, l := range cur.Lines {
+		if photoLines[l.Name] {
+			if !placed {
+				out.Lines = append(out.Lines, photo...)
+				placed = true
+			}
+
+			continue
+		}
+
+		if l.Name == "END" && !placed {
+			out.Lines = append(out.Lines, photo...)
+			placed = true
+		}
+
+		out.Lines = append(out.Lines, l)
+	}
+
+	return out
+}
+
+// PhotoKey identifies a photo by its bytes, so two revisions with the
+// same picture count once.
+func (c Card) PhotoKey() string {
+	l, ok := c.Get("PHOTO")
+	if !ok {
+		return ""
+	}
+
+	v := strings.Map(dropSpace, l.Value)
+	if len(v) > 64 {
+		return v[:32] + v[len(v)-32:] + strconv.Itoa(len(v))
+	}
+
+	return v
 }

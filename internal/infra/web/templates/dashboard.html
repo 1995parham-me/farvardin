@@ -1,33 +1,58 @@
 {{template "head" .}}
-<section class="cards">
-  {{range .Collections}}
-  <a class="stat" href="{{.Link}}">
-    <span class="label">{{.Kind}}</span>
-    <span class="value">{{.Objects}}</span>
-    <span class="sub" dir="auto">{{if .Display}}{{.Display}}{{else}}{{.Name}}{{end}}</span>
-  </a>
-  {{end}}
+<section class="hello">
+  <h1>{{.Greeting}}{{if .User}}, {{.User}}{{end}}</h1>
+  <p class="muted">{{.Stats.contacts}} contacts · {{.Stats.week}} things in the next 7 days</p>
+</section>
+
+<section class="tiles">
+  {{range .Books}}<a class="tile" href="{{ui "/contacts/"}}{{.Name}}/"><span class="label">Contacts</span><span class="value pink">{{$.Stats.contacts}}</span><span class="sub">{{$.Stats.photos}} with a photo · {{pct $.Stats.photos $.Stats.contacts}}%</span></a>
+  <a class="tile" href="{{ui "/contacts/"}}{{.Name}}/?f=lowres"><span class="label">Low-res photos</span><span class="value {{if $.Stats.lowres}}orange{{else}}green{{end}}">{{$.Stats.lowres}}</span><span class="sub">thumbnails you can restore</span></a>
+  <a class="tile" href="{{ui "/contacts/"}}{{.Name}}/?f=errors"><span class="label">Cards with errors</span><span class="value {{if $.Stats.errors}}red{{else}}green{{end}}">{{$.Stats.errors}}</span><span class="sub">a client could not save them</span></a>{{end}}
+  <a class="tile" href="#soon"><span class="label">Birthdays · 30 days</span><span class="value aqua">{{len .Soon}}</span><span class="sub">and anniversaries</span></a>
 </section>
 
 <div class="grid2">
-<section>
-  <h2>Next 30 days</h2>
+<section id="soon" class="panel">
+  <h2>{{template "icon" "cake"}}Coming up</h2>
   {{if .Soon}}
   <ul class="list">
     {{range .Soon}}
-    <li><a href="{{.Link}}"><span dir="auto">{{.Title}}</span><span class="muted">{{if eq .Days 0}}today{{else if eq .Days 1}}tomorrow{{else}}in {{.Days}} days · {{date .When}}{{end}}</span></a></li>
+    <li><a class="row" href="{{.Link}}">{{template "avatar" .}}
+      <span class="grow"><span class="name" dir="auto">{{.Name}}</span><span class="muted">{{if eq .What "birthday"}}{{if .Age}}turns {{.Age}}{{else}}birthday{{end}}{{else}}anniversary{{if .Age}} · {{.Age}} years{{end}}{{end}}</span></span>
+      <span class="when {{if le .Days 1}}hot{{end}}">{{if eq .Days 0}}today{{else if eq .Days 1}}tomorrow{{else}}{{day .When}}<small>in {{.Days}} d</small>{{end}}</span>
+    </a></li>
     {{end}}
   </ul>
-  {{else}}<p class="muted">No birthdays or anniversaries in the next 30 days.</p>{{end}}
+  {{else}}<p class="empty">Nothing in the next 30 days.</p>{{end}}
 </section>
 
-<section>
-  <h2>Recent changes</h2>
-  <ul class="list">
+<section class="panel">
+  <h2>{{template "icon" "calendar"}}This week</h2>
+  {{if .Week}}
+  <ol class="agenda compact">
+    {{range .Week}}<li><h3 class="{{if .Today}}today{{end}}">{{.Label}}</h3>
+      <ul>{{range .Rows}}<li><span class="time">{{if .AllDay}}all day{{else}}{{clock .When}}{{end}}</span><span dir="auto">{{.Title}}</span>{{if eq .Calendar "birthdays"}}<span class="chip">birthday</span>{{end}}</li>{{end}}</ul>
+    </li>{{end}}
+  </ol>
+  {{else}}<p class="empty">A quiet week.</p>{{end}}
+</section>
+
+<section class="panel">
+  <h2>{{template "icon" "clock"}}Recent changes</h2>
+  <ul class="list timeline">
     {{range .Recent}}
-    <li><div><span>{{.Rev.Message}}</span><span class="muted">{{.Collection}} · {{datetime .Rev.When}}{{if .Rev.Requester}} · {{.Rev.Requester}}{{end}}</span></div></li>
+    <li><span class="dot {{if eq .Kind "calendar"}}aqua{{else}}pink{{end}}"></span><div class="grow">{{if .Link}}<a href="{{.Link}}" dir="auto">{{.Title}}</a>{{else}}<span dir="auto">{{.Title}}</span>{{end}}<span class="muted">{{.Collection}} · {{.Device}}</span></div><span class="muted mono" title="{{datetime .Rev.When}}">{{ago .Rev.When}}</span></li>
     {{end}}
   </ul>
+</section>
+
+<section class="panel">
+  <h2>{{template "icon" "phone"}}Devices · 30 days</h2>
+  {{if .Devices}}
+  <ul class="bars">
+    {{range .Devices}}<li><span class="grow">{{.Name}}</span><span class="bar"><span class="w{{tenth .Count $.MaxDevice}}"></span></span><span class="mono muted">{{.Count}}</span></li>{{end}}
+  </ul>
+  {{else}}<p class="empty">No writes in 30 days.</p>{{end}}
 </section>
 </div>
 {{template "foot" .}}

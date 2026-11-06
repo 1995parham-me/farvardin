@@ -1,14 +1,20 @@
 {{template "head" .}}
-<div class="bar">
-  <h1 dir="auto">{{.Title}} <span class="muted">next 90 days</span></h1>
-  <a class="button" href="{{.Feed}}">Subscribe (.ics)</a>
+<div class="pagehead">
+  <h1 dir="auto">{{.Title}} <span class="count">{{.Count}}</span></h1>
+  <a class="button" href="{{.Feed}}">{{template "icon" "calendar"}}Subscribe (.ics)</a>
 </div>
-<ul class="list">
-  {{range .Rows}}
-  <li><div><span dir="auto">{{.Title}}{{if .Repeats}} <span class="badge">repeats</span>{{end}}{{if eq .Kind "VTODO"}} <span class="badge">task</span>{{end}}</span>
-  <span class="muted">{{if .AllDay}}{{date .When}}{{else}}{{datetime .When}}{{end}}{{if .Location}} · {{.Location}}{{end}}</span></div></li>
-  {{else}}
-  <li class="muted">Nothing in the next 90 days.</li>
+<p class="muted">The next 90 days.</p>
+{{if .Days}}
+<ol class="agenda">
+  {{range .Days}}
+  <li><h3 class="{{if .Today}}today{{end}}">{{.Label}}<small>{{date .Date}}</small></h3>
+    <ul>{{range .Rows}}
+      <li><span class="time">{{if .AllDay}}all day{{else}}{{clock .When}}{{end}}</span>
+        <span class="grow"><span dir="auto">{{.Title}}</span>{{if .Location}}<span class="muted" dir="auto">{{.Location}}</span>{{end}}</span>
+        {{if .Repeats}}<span class="chip">repeats</span>{{end}}{{if eq .Kind "VTODO"}}<span class="chip">task</span>{{end}}</li>
+    {{end}}</ul>
+  </li>
   {{end}}
-</ul>
+</ol>
+{{else}}<p class="empty">Nothing in the next 90 days.</p>{{end}}
 {{template "foot" .}}

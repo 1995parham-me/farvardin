@@ -1,18 +1,19 @@
-// Package web serves a read-only browser UI for the store: contacts with
-// their photos and history, upcoming birthdays and events, and a report
-// of cards that fail validation.
+// Package web serves the browser UI: a dashboard, contacts with their
+// photos, change history and photo restore, an agenda, and a report of
+// cards that fail validation. Pages are rendered on the server; a small
+// script adds instant search and copy buttons.
 package web
 
 import (
 	"bytes"
 	"embed"
-	"encoding/json"
 	"fmt"
 	"hash/fnv"
 	"html/template"
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"slices"
 	"sort"
 	"strconv"
@@ -34,31 +35,63 @@ type Parser func(col *store.Collection, etag string) (*contact.Card, *calendar.C
 // BirthdaySource returns the generated birthdays calendar, or nil.
 type BirthdaySource func() (*store.Snapshot, func(string) ([]byte, error))
 
+// CardWriter stores a card through the server's validated write path.
+type CardWriter func(book, name string, data []byte, ifMatch, requester string) (string, error)
+
+// Options configures the UI.
+type Options struct {
+	// Prefix is where the UI is mounted, for example "/ui".
+	Prefix string
+	// DAVPrefix is where the DAV tree is mounted, for download links.
+	DAVPrefix string
+	// Sessions enables the login page; nil leaves authentication to a
+	// proxy in front.
+	Sessions *Sessions
+	// Writer enables the actions that change a card (photo restore).
+	Writer CardWriter
+}
+
 // Handler is the UI http.Handler, mounted at Prefix.
 type Handler struct {
 	store     *store.Store
 	parse     Parser
 	birthdays BirthdaySource
+	write     CardWriter
 	prefix    string
 	davPrefix string
+	sessions  *Sessions
 	log       *slog.Logger
 	tmpl      *template.Template
 	mux       *http.ServeMux
+	thumbs    *thumbCache
+	lists     *listCache
 }
 
-// New builds the UI. prefix is where it is mounted (for example "/ui").
-func New(s *store.Store, parse Parser, birthdays BirthdaySource, prefix, davPrefix string, log *slog.Logger) (*Handler, error) {
-	h := &Handler{store: s, parse: parse, birthdays: birthdays, prefix: strings.TrimSuffix(prefix, "/"), davPrefix: strings.TrimSuffix(davPrefix, "/"), log: log, tmpl: nil, mux: http.NewServeMux()}
+// New builds the UI.
+func New(s *store.Store, parse Parser, birthdays BirthdaySource, opts Options, log *slog.Logger) (*Handler, error) {
+	h := &Handler{
+		store: s, parse: parse, birthdays: birthdays, write: opts.Writer,
+		prefix: strings.TrimSuffix(opts.Prefix, "/"), davPrefix: strings.TrimSuffix(opts.DAVPrefix, "/"),
+		sessions: opts.Sessions, log: log, tmpl: nil, mux: http.NewServeMux(),
+		thumbs: newThumbCache(64 << 20), lists: newListCache(),
+	}
 
 	funcs := template.FuncMap{
 		"ui":       func(p string) string { return h.prefix + p },
+		"asset":    func(p string) string { return h.prefix + "/static/" + p + "?v=" + assetVersion },
 		"initials": initials,
 		"hue":      hue,
 		"date":     func(t time.Time) string { return t.Format("Mon 2 Jan 2006") },
-		"datetime": func(t time.Time) string { return t.Local().Format("2 Jan 2006 15:04") }, //nolint:gosmopolitan // the UI shows the server's local time on purpose
+		"day":      func(t time.Time) string { return t.Format("2 Jan") },
+		"clock":    func(t time.Time) string { return t.Local().Format("15:04") },            //nolint:gosmopolitan // the UI shows the server's local time on purpose
+		"datetime": func(t time.Time) string { return t.Local().Format("2 Jan 2006 15:04") }, //nolint:gosmopolitan // as above
+		"ago":      ago,
 		"short":    func(s string) string { return s[:min(8, len(s))] },
 		"kib":      func(n int64) string { return strconv.FormatInt((n+1023)/1024, 10) + " KiB" },
 		"join":     strings.Join,
+		"device":   device,
+		"pct":      func(a, b int) int { return a * 100 / max(b, 1) },
+		"tenth":    func(a, b int) int { return (a*10 + max(b, 1) - 1) / max(b, 1) },
 	}
 
 	tmpl, err := template.New("").Funcs(funcs).ParseFS(assets, "templates/*.html")
@@ -73,23 +106,56 @@ func New(s *store.Store, parse Parser, birthdays BirthdaySource, prefix, davPref
 		return nil, fmt.Errorf("static assets: %w", err)
 	}
 
-	h.mux.Handle("GET "+h.prefix+"/static/", http.StripPrefix(h.prefix+"/static/", http.FileServerFS(static)))
-	h.mux.HandleFunc("GET "+h.prefix+"/{$}", h.dashboard)
-	h.mux.HandleFunc("GET "+h.prefix+"/contacts/{book}/{$}", h.contacts)
-	h.mux.HandleFunc("GET "+h.prefix+"/contacts/{book}/{name}", h.contactPage)
-	h.mux.HandleFunc("GET "+h.prefix+"/photo/{book}/{name}", h.photo)
-	h.mux.HandleFunc("GET "+h.prefix+"/calendars/{cal}/{$}", h.events)
-	h.mux.HandleFunc("GET "+h.prefix+"/lint", h.lint)
+	p := h.prefix
+	h.mux.Handle("GET "+p+"/static/", cacheForever(http.StripPrefix(p+"/static/", http.FileServerFS(static))))
+	h.mux.HandleFunc("GET "+p+"/login", h.loginPage)
+	h.mux.HandleFunc("POST "+p+"/login", h.login)
+	h.mux.HandleFunc("POST "+p+"/logout", h.logout)
+	h.mux.HandleFunc("GET "+p+"/{$}", h.dashboard)
+	h.mux.HandleFunc("GET "+p+"/contacts/{book}/{$}", h.contacts)
+	h.mux.HandleFunc("GET "+p+"/contacts/{book}/{name}", h.contactPage)
+	h.mux.HandleFunc("POST "+p+"/contacts/{book}/{name}/photo", h.restorePhoto)
+	h.mux.HandleFunc("GET "+p+"/photo/{book}/{name}", h.photo)
+	h.mux.HandleFunc("GET "+p+"/calendars/{cal}/{$}", h.events)
+	h.mux.HandleFunc("GET "+p+"/lint", h.lint)
 
 	return h, nil
 }
 
-func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) { h.mux.ServeHTTP(w, r) }
+// ServeHTTP checks the session (when login is on) and serves the page.
+func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if h.sessions == nil || h.public(r.URL.Path) {
+		h.mux.ServeHTTP(w, r)
 
-func (h *Handler) render(w http.ResponseWriter, name string, data map[string]any) {
+		return
+	}
+
+	user, err := h.sessions.User(r)
+	if err != nil {
+		http.Redirect(w, r, h.prefix+"/login?next="+url.QueryEscape(r.URL.RequestURI()), http.StatusSeeOther)
+
+		return
+	}
+
+	h.mux.ServeHTTP(w, r.WithContext(withUser(r.Context(), user)))
+}
+
+// public paths need no session.
+func (h *Handler) public(p string) bool {
+	return p == h.prefix+"/login" || strings.HasPrefix(p, h.prefix+"/static/")
+}
+
+func (h *Handler) render(w http.ResponseWriter, r *http.Request, name string, data map[string]any) {
+	h.renderStatus(w, r, http.StatusOK, name, data)
+}
+
+func (h *Handler) renderStatus(w http.ResponseWriter, r *http.Request, status int, name string, data map[string]any) {
+	data["User"] = userFrom(r.Context())
+	data["Login"] = h.sessions != nil
 	data["Prefix"] = h.prefix
 	data["Books"] = h.store.Collections(store.AddressBook)
 	data["Calendars"] = h.calendarNames()
+	data["Path"] = r.URL.Path
 
 	var buf bytes.Buffer
 	if err := h.tmpl.ExecuteTemplate(&buf, name, data); err != nil {
@@ -100,7 +166,10 @@ func (h *Handler) render(w http.ResponseWriter, name string, data map[string]any
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Content-Security-Policy", "default-src 'self'; img-src 'self' data:; style-src 'self'")
+	w.Header().Set("Content-Security-Policy", "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Referrer-Policy", "same-origin")
+	w.WriteHeader(status)
 	_, _ = w.Write(buf.Bytes())
 }
 
@@ -118,35 +187,52 @@ func (h *Handler) calendarNames() []string {
 	return out
 }
 
+// thumbSize is the longest side that counts as a low-resolution photo.
+const thumbSize = 128
+
 // person is one row of a contact list.
 type person struct {
 	Name     string
 	File     string
+	ETag     string
 	Book     string
 	Org      string
 	Email    string
 	Phone    string
+	Letter   string
+	Search   string
 	HasPhoto bool
+	LowRes   bool
+	PhotoW   int
 	Issues   int
 }
 
 func (h *Handler) people(book *store.Collection) ([]person, *store.Snapshot, error) {
 	snap, err := book.Snapshot()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("reading %s: %w", book.Name(), err)
+	}
+
+	if cached, ok := h.lists.get(book.Name(), snap.Token); ok {
+		return cached, snap, nil
 	}
 
 	out := make([]person, 0, len(snap.Objects))
 
 	for _, o := range snap.Objects {
+		p := person{
+			Name: o.Name, File: o.Name, ETag: o.ETag, Book: book.Name(), Org: "", Email: "", Phone: "",
+			Letter: "#", Search: strings.ToLower(o.Name), HasPhoto: false, LowRes: false, PhotoW: 0, Issues: 1,
+		}
+
 		card, _, err := h.parse(book, o.ETag)
 		if err != nil || card == nil {
-			out = append(out, person{Name: o.Name, File: o.Name, Book: book.Name(), Org: "", Email: "", Phone: "", HasPhoto: false, Issues: 1})
+			out = append(out, p)
 
 			continue
 		}
 
-		p := person{Name: card.DisplayName(), File: o.Name, Book: book.Name(), Org: card.Organization(), Email: "", Phone: "", HasPhoto: false, Issues: 0}
+		p.Name, p.Org, p.Issues = card.DisplayName(), card.Organization(), 0
 
 		if e := card.Values("EMAIL"); len(e) > 0 {
 			p.Email = e[0].Value
@@ -156,7 +242,11 @@ func (h *Handler) people(book *store.Collection) ([]person, *store.Snapshot, err
 			p.Phone = t[0].Value
 		}
 
-		_, p.HasPhoto = card.Get("PHOTO")
+		if ph, err := card.Photo(); err == nil {
+			p.HasPhoto = true
+			p.PhotoW = max(ph.Width, ph.Height)
+			p.LowRes = p.PhotoW > 0 && p.PhotoW <= thumbSize
+		}
 
 		for _, i := range contact.Validate(*card) {
 			if i.Severity == contact.Error {
@@ -164,99 +254,36 @@ func (h *Handler) people(book *store.Collection) ([]person, *store.Snapshot, err
 			}
 		}
 
+		p.Letter = letter(p.Name)
+		p.Search = strings.ToLower(strings.Join([]string{p.Name, p.Org, p.Email, p.Phone, card.Value("NICKNAME")}, " "))
 		out = append(out, p)
 	}
 
 	sort.SliceStable(out, func(i, j int) bool { return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name) })
+	h.lists.put(book.Name(), snap.Token, out)
 
 	return out, snap, nil
 }
 
-type upcoming struct {
-	When  time.Time
-	Days  int
-	Title string
-	Link  string
-}
+// letter is the index letter of a name: an upper-case Latin letter, the
+// first Persian letter, or "#".
+func letter(name string) string {
+	for _, r := range name {
+		if unicode.IsLetter(r) {
+			return string(unicode.ToUpper(r))
+		}
 
-func (h *Handler) dashboard(w http.ResponseWriter, _ *http.Request) {
-	now := time.Now()
-
-	type colInfo struct {
-		Kind, Name, Display, Link string
-		Objects                   int
-	}
-
-	var (
-		cols   []colInfo
-		recent []map[string]any
-		soon   []upcoming
-	)
-
-	for _, kind := range []store.Kind{store.AddressBook, store.Calendar} {
-		for _, c := range h.store.Collections(kind) {
-			snap, err := c.Snapshot()
-			if err != nil {
-				continue
-			}
-
-			link := h.prefix + "/" + kind.Home() + "/" + c.Name() + "/"
-			cols = append(cols, colInfo{Kind: string(kind), Name: c.Name(), Display: snap.Meta().DisplayName(), Link: link, Objects: len(snap.Objects)})
-
-			revs, _ := c.Recent(8)
-			for _, r := range revs {
-				recent = append(recent, map[string]any{"Rev": r, "Collection": c.Name()})
-			}
-
-			if kind != store.AddressBook {
-				continue
-			}
-
-			for _, o := range snap.Objects {
-				card, _, err := h.parse(c, o.ETag)
-				if err != nil || card == nil {
-					continue
-				}
-
-				for _, d := range card.Dates() {
-					if d.Kind == contact.OtherDate {
-						continue
-					}
-
-					next := d.Next(now)
-					days := int(next.Sub(truncate(now)).Hours() / 24)
-
-					if days <= 30 {
-						title := card.DisplayName()
-						if d.Kind == contact.Birthday {
-							title = "🎂 " + title
-							if d.Year > 0 {
-								title += " turns " + strconv.Itoa(next.Year()-d.Year)
-							}
-						} else {
-							title = "💍 " + title
-						}
-
-						soon = append(soon, upcoming{When: next, Days: days, Title: title, Link: h.prefix + "/contacts/" + c.Name() + "/" + o.Name})
-					}
-				}
-			}
+		if !unicode.IsSpace(r) && !unicode.IsPunct(r) {
+			break
 		}
 	}
 
-	sort.Slice(soon, func(i, j int) bool { return soon[i].When.Before(soon[j].When) })
-	sort.Slice(recent, func(i, j int) bool {
-		a, _ := recent[i]["Rev"].(store.Revision)
-		b, _ := recent[j]["Rev"].(store.Revision)
-
-		return a.When.After(b.When)
-	})
-
-	h.render(w, "dashboard.html", map[string]any{"Title": "Farvardin", "Collections": cols, "Soon": soon, "Recent": recent[:min(12, len(recent))]})
+	return "#"
 }
 
-func truncate(t time.Time) time.Time {
-	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, t.Location())
+type group struct {
+	Letter string
+	People []person
 }
 
 func (h *Handler) contacts(w http.ResponseWriter, r *http.Request) {
@@ -274,22 +301,49 @@ func (h *Handler) contacts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	q := strings.TrimSpace(r.URL.Query().Get("q"))
-	shown := all
+	filter := r.URL.Query().Get("f")
+	q := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("q")))
+	counts := map[string]int{"all": len(all)}
 
-	if q != "" {
-		needle := strings.ToLower(q)
-		shown = nil
+	var shown []person
 
-		for _, p := range all {
-			if strings.Contains(strings.ToLower(p.Name+" "+p.Org+" "+p.Email+" "+p.Phone), needle) {
-				shown = append(shown, p)
-			}
+	for _, p := range all {
+		counts[map[bool]string{true: "photo", false: "nophoto"}[p.HasPhoto]]++
+
+		if p.LowRes {
+			counts["lowres"]++
+		}
+
+		if p.Issues > 0 {
+			counts["errors"]++
+		}
+
+		keep := filter == "" || filter == "all" ||
+			(filter == "photo" && p.HasPhoto) || (filter == "nophoto" && !p.HasPhoto) ||
+			(filter == "lowres" && p.LowRes) || (filter == "errors" && p.Issues > 0)
+
+		if keep && (q == "" || strings.Contains(p.Search, q)) {
+			shown = append(shown, p)
 		}
 	}
 
-	h.render(w, "contacts.html", map[string]any{
-		"Title": snap.Meta().DisplayName(), "Book": book.Name(), "People": shown, "Total": len(all), "Query": q,
+	var (
+		groups  []group
+		letters []string
+	)
+
+	for _, p := range shown {
+		if len(groups) == 0 || groups[len(groups)-1].Letter != p.Letter {
+			groups = append(groups, group{Letter: p.Letter, People: nil})
+			letters = append(letters, p.Letter)
+		}
+
+		groups[len(groups)-1].People = append(groups[len(groups)-1].People, p)
+	}
+
+	h.render(w, r, "contacts.html", map[string]any{
+		"Title": snap.Meta().DisplayName(), "Book": book.Name(), "Groups": groups, "Letters": letters,
+		"Shown": len(shown), "Counts": counts, "Filter": filter, "Query": r.URL.Query().Get("q"),
 		"Export": h.davPrefix + "/" + h.store.Principal() + "/contacts/" + book.Name() + "/",
 	})
 }
@@ -298,6 +352,8 @@ type field struct {
 	Label string
 	Value string
 	Link  string
+	Copy  bool
+	Kind  string
 }
 
 func (h *Handler) contactPage(w http.ResponseWriter, r *http.Request) {
@@ -331,23 +387,21 @@ func (h *Handler) contactPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	hist, _ := book.History(name, 15)
-
-	js, err := json.MarshalIndent(contact.ToJSContact(*card, false), "", "  ")
-	if err != nil {
-		js = []byte(err.Error())
-	}
-	_, hasPhoto := card.Get("PHOTO")
+	revs, _ := book.History(name, 25)
 
 	photoInfo := ""
 	if p, err := card.Photo(); err == nil {
-		photoInfo = fmt.Sprintf("%d×%d %s, %d KiB", p.Width, p.Height, p.MediaType, len(p.Data)/1024)
+		photoInfo = fmt.Sprintf("%d×%d · %d KiB", p.Width, p.Height, len(p.Data)/1024)
 	}
 
-	h.render(w, "contact.html", map[string]any{
+	_, hasPhoto := card.Get("PHOTO")
+
+	h.render(w, r, "contact.html", map[string]any{
 		"Title": card.DisplayName(), "Book": book.Name(), "File": name, "Card": card, "Fields": fields(*card),
-		"Issues": contact.Validate(*card), "History": hist, "JSContact": string(js), "Object": obj,
-		"HasPhoto": hasPhoto, "PhotoInfo": photoInfo, "Version": card.Version(),
+		"Org": strings.Join(nonEmpty(orgParts(*card)), " · "), "JobTitle": card.Value("TITLE"),
+		"Issues": contact.Validate(*card), "Timeline": h.timeline(book, revs), "Photos": h.photoHistory(book, *card, revs),
+		"Object": obj, "HasPhoto": hasPhoto, "PhotoInfo": photoInfo, "Version": card.Version(), "CanWrite": h.write != nil,
+		"Restored": r.URL.Query().Get("restored") != "", "Failed": r.URL.Query().Get("error"),
 		"Raw": h.davPrefix + "/" + h.store.Principal() + "/contacts/" + book.Name() + "/" + name,
 	})
 }
@@ -362,7 +416,7 @@ func fields(c contact.Card) []field {
 			parts = []string{v.Label}
 		}
 
-		parts = slices.DeleteFunc(parts, func(s string) bool { return s == "internet" || s == "voice" })
+		parts = slices.DeleteFunc(parts, func(s string) bool { return s == "internet" || s == "voice" || s == "pref" })
 		if len(parts) == 0 {
 			return fallback
 		}
@@ -370,36 +424,34 @@ func fields(c contact.Card) []field {
 		return fallback + " · " + strings.Join(parts, ", ")
 	}
 
-	add := func(lbl, val, link string) {
-		if strings.TrimSpace(val) != "" {
-			out = append(out, field{Label: lbl, Value: val, Link: link})
+	add := func(f field) {
+		if strings.TrimSpace(f.Value) != "" {
+			out = append(out, f)
 		}
 	}
 
-	add("Nickname", c.Value("NICKNAME"), "")
-	add("Organization", strings.Join(nonEmpty(orgParts(c)), " · "), "")
-	add("Title", c.Value("TITLE"), "")
-
 	for _, v := range c.Values("TEL") {
-		add(label(v, "Phone"), v.Value, "tel:"+v.Value)
+		add(field{Label: label(v, "Phone"), Value: v.Value, Link: "tel:" + v.Value, Copy: true, Kind: "phone"})
 	}
 
 	for _, v := range c.Values("EMAIL") {
-		add(label(v, "Email"), v.Value, "mailto:"+v.Value)
+		add(field{Label: label(v, "Email"), Value: v.Value, Link: "mailto:" + v.Value, Copy: true, Kind: "email"})
 	}
 
+	add(field{Label: "Nickname", Value: c.Value("NICKNAME"), Link: "", Copy: false, Kind: "text"})
+
 	for _, v := range c.Values("ADR") {
-		add(label(v, "Address"), v.Value, "")
+		add(field{Label: label(v, "Address"), Value: v.Value, Link: "", Copy: true, Kind: "address"})
 	}
 
 	for _, v := range c.Values("URL") {
-		add(label(v, "Link"), v.Value, v.Value)
+		add(field{Label: label(v, "Link"), Value: v.Value, Link: v.Value, Copy: false, Kind: "link"})
 	}
 
 	for _, n := range []string{"SOCIALPROFILE", "X-SOCIALPROFILE", "IMPP"} {
 		for _, l := range c.All(n) {
 			svc := strings.Join(append(l.Param("SERVICE-TYPE"), l.Param("TYPE")...), ", ")
-			add("Profile · "+svc, l.Text(), l.Text())
+			add(field{Label: "Profile · " + svc, Value: l.Text(), Link: l.Text(), Copy: false, Kind: "link"})
 		}
 	}
 
@@ -414,11 +466,11 @@ func fields(c contact.Card) []field {
 			lbl = d.Label
 		}
 
-		add(lbl, val, "")
+		add(field{Label: lbl, Value: val, Link: "", Copy: false, Kind: "date"})
 	}
 
-	add("Pronouns", c.Value("PRONOUNS"), "")
-	add("Note", c.Value("NOTE"), "")
+	add(field{Label: "Pronouns", Value: c.Value("PRONOUNS"), Link: "", Copy: false, Kind: "text"})
+	add(field{Label: "Note", Value: c.Value("NOTE"), Link: "", Copy: false, Kind: "note"})
 
 	return out
 }
@@ -436,149 +488,7 @@ func nonEmpty(in []string) []string {
 	return slices.DeleteFunc(in, func(s string) bool { return strings.TrimSpace(s) == "" })
 }
 
-func (h *Handler) photo(w http.ResponseWriter, r *http.Request) {
-	book, err := h.store.Collection(store.AddressBook, r.PathValue("book"))
-	if err != nil {
-		http.NotFound(w, r)
-
-		return
-	}
-
-	snap, err := book.Snapshot()
-	if err != nil {
-		http.NotFound(w, r)
-
-		return
-	}
-
-	obj, ok := snap.Lookup(r.PathValue("name"))
-	if !ok {
-		http.NotFound(w, r)
-
-		return
-	}
-
-	size, _ := strconv.Atoi(r.URL.Query().Get("s"))
-	etag := `"` + obj.ETag + "-" + strconv.Itoa(size) + `"`
-
-	if r.Header.Get("If-None-Match") == etag {
-		w.WriteHeader(http.StatusNotModified)
-
-		return
-	}
-
-	card, _, err := h.parse(book, obj.ETag)
-	if err != nil || card == nil {
-		http.NotFound(w, r)
-
-		return
-	}
-
-	p, err := card.Photo()
-	if err != nil {
-		http.NotFound(w, r)
-
-		return
-	}
-
-	data, media, err := p.Thumbnail(size)
-	if err != nil {
-		data, media = p.Data, p.MediaType
-	}
-
-	w.Header().Set("Content-Type", media)
-	w.Header().Set("ETag", etag)
-	w.Header().Set("Cache-Control", "private, max-age=86400")
-	_, _ = w.Write(data)
-}
-
-type eventRow struct {
-	When     time.Time
-	AllDay   bool
-	Title    string
-	Location string
-	Repeats  bool
-	Kind     string
-}
-
-func (h *Handler) events(w http.ResponseWriter, r *http.Request) {
-	name := r.PathValue("cal")
-	now := truncate(time.Now())
-	horizon := now.AddDate(0, 0, 90)
-
-	var (
-		rows  []eventRow
-		title = name
-	)
-
-	collect := func(read func(string) ([]byte, error), snap *store.Snapshot, parse func(store.Object) *calendar.Component) {
-		for _, o := range snap.Objects {
-			cal := parse(o)
-			if cal == nil {
-				continue
-			}
-
-			s, ok := calendar.Summarize(cal)
-			if !ok {
-				continue
-			}
-
-			next, _ := calendar.NextOccurrence(cal, now)
-			if next.Before(now) || next.After(horizon) {
-				continue
-			}
-
-			rows = append(rows, eventRow{When: next, AllDay: s.AllDay, Title: s.Title, Location: s.Location, Repeats: s.Repeats, Kind: s.Kind})
-		}
-
-		_ = read
-	}
-
-	if col, err := h.store.Collection(store.Calendar, name); err == nil {
-		snap, err := col.Snapshot()
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-
-			return
-		}
-
-		if d := snap.Meta().DisplayName(); d != "" {
-			title = d
-		}
-
-		collect(nil, snap, func(o store.Object) *calendar.Component {
-			_, cal, _ := h.parse(col, o.ETag)
-
-			return cal
-		})
-	} else if snap, read := h.birthdays(); name == "birthdays" && snap != nil {
-		title = "Birthdays"
-
-		collect(read, snap, func(o store.Object) *calendar.Component {
-			data, err := read(o.ETag)
-			if err != nil {
-				return nil
-			}
-
-			cal, _ := calendar.Parse(data)
-
-			return cal
-		})
-	} else {
-		http.NotFound(w, r)
-
-		return
-	}
-
-	sort.Slice(rows, func(i, j int) bool { return rows[i].When.Before(rows[j].When) })
-
-	h.render(w, "events.html", map[string]any{
-		"Title": title, "Rows": rows,
-		"Feed": h.davPrefix + "/" + h.store.Principal() + "/calendars/" + name + "/",
-	})
-}
-
-func (h *Handler) lint(w http.ResponseWriter, _ *http.Request) {
+func (h *Handler) lint(w http.ResponseWriter, r *http.Request) {
 	type finding struct {
 		Book, File, Name string
 		Issues           []contact.Issue
@@ -606,7 +516,7 @@ func (h *Handler) lint(w http.ResponseWriter, _ *http.Request) {
 		}
 	}
 
-	h.render(w, "lint.html", map[string]any{"Title": "Lint", "Findings": findings})
+	h.render(w, r, "lint.html", map[string]any{"Title": "Lint", "Findings": findings})
 }
 
 func initials(name string) string {
@@ -635,4 +545,21 @@ func hue(s string) int {
 	_, _ = f.Write([]byte(s))
 
 	return int(f.Sum32() % 12)
+}
+
+func ago(t time.Time) string {
+	d := time.Since(t)
+
+	switch {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return strconv.Itoa(int(d.Minutes())) + " min ago"
+	case d < 24*time.Hour:
+		return strconv.Itoa(int(d.Hours())) + " h ago"
+	case d < 30*24*time.Hour:
+		return strconv.Itoa(int(d.Hours()/24)) + " d ago"
+	default:
+		return t.Format("2 Jan 2006")
+	}
 }

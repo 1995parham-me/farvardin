@@ -102,12 +102,18 @@ func serve(ctx context.Context, cmd *cli.Command) error {
 	guard := auth.New(cfg.Auth.Mode, cfg.Auth.Realm, cfg.Auth.Header, cfg.Auth.Users)
 
 	if cfg.Server.UI {
-		ui, err := web.New(s, davHandler.Cache(), davHandler.Birthdays, uiPath, cfg.Server.Prefix, log)
+		ui, err := newUI(cfg, s, davHandler, log)
 		if err != nil {
 			return err
 		}
 
-		mux.Handle(uiPath+"/", guard.Wrap(ui))
+		if cfg.UI.Auth == "jwt" {
+			mux.Handle(uiPath+"/", ui)
+		} else {
+			mux.Handle(uiPath+"/", guard.Wrap(ui))
+		}
+
+		go ui.Warm(ctx)
 	}
 
 	if m != nil && cfg.Server.MetricsListen == "" {
@@ -172,6 +178,29 @@ func davOptions(cfg config.Config, uiPath string, pushSvc *push.Service) dav.Opt
 		CalendarUserAddress:   cfg.Calendars.UserAddress,
 		Push:                  pushSvc,
 	}
+}
+
+func newUI(cfg config.Config, s *store.Store, d *dav.Handler, log *slog.Logger) (*web.Handler, error) {
+	var sessions *web.Sessions
+
+	if cfg.UI.Auth == "jwt" {
+		var err error
+
+		sessions, err = web.NewSessions(web.SessionOptions{
+			Users: cfg.UI.Users, SecretFile: cfg.UI.SecretFile, TTL: cfg.UI.SessionTTL,
+			Secure: cfg.UI.SecureCookie, CookiePath: uiPath,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("ui sessions: %w", err)
+		}
+	}
+
+	ui, err := web.New(s, d.Cache(), d.Birthdays, web.Options{Prefix: uiPath, DAVPrefix: cfg.Server.Prefix, Sessions: sessions, Writer: d.WriteCard}, log)
+	if err != nil {
+		return nil, fmt.Errorf("ui: %w", err)
+	}
+
+	return ui, nil
 }
 
 func newPush(cfg config.Push, log *slog.Logger) (*push.Service, error) {
