@@ -1,11 +1,11 @@
 {{template "head" .}}
 <div class="pagehead"><h1>Lint <span class="count">{{len .Findings}}</span></h1></div>
-<p class="muted">Errors stop a client from saving the card again; warnings are advice.</p>
+<p class="muted">Errors stop a client from saving the card again; warnings are advice. A suggested value (→) can be applied from the contact's page.</p>
 {{if .Findings}}
 <ul class="list">
   {{range .Findings}}
   <li><a class="row" href="{{ui "/contacts/"}}{{.Book}}/{{.File}}"><span class="grow"><span class="name" dir="auto">{{.Name}}</span>
-  <span class="issues-inline">{{range .Issues}}<span class="chip {{if eq .Severity "error"}}bad{{else}}warn{{end}}">{{.Message}}</span>{{end}}</span></span></a></li>
+  <span class="issues-inline">{{range .Issues}}<span class="chip {{if eq .Severity "error"}}bad{{else}}warn{{end}}">{{.Message}}{{if .Fix}} → {{.Fix}}{{end}}</span>{{end}}</span></span></a></li>
   {{end}}
 </ul>
 {{else}}<p class="empty good">{{template "icon" "check"}}Every card is clean.</p>{{end}}

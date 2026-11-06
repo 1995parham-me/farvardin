@@ -21,9 +21,11 @@
     const none = document.querySelector("[data-none]");
     const apply = () => {
       const q = filter.value.trim().toLowerCase();
+      // A phone-like query matches by digits, however the number is written.
+      const qd = /^[\d\s+().-]+$/.test(q) ? q.replace(/\D/g, "") : "";
       let shown = 0;
       for (const li of items) {
-        const hit = !q || li.dataset.search.includes(q);
+        const hit = !q || li.dataset.search.includes(q) || (qd.length >= 4 && li.dataset.search.includes(qd));
         li.hidden = !hit;
         if (hit) shown++;
       }

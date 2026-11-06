@@ -117,7 +117,7 @@ func serve(ctx context.Context, cmd *cli.Command) error {
 	}
 
 	if cfg.MCP.Enabled {
-		mountMCP(mux, cfg.MCP, s, davHandler, log)
+		mountMCP(mux, cfg.MCP, cfg.Contacts.PhoneRegion, s, davHandler, log)
 	}
 
 	if m != nil && cfg.Server.MetricsListen == "" {
@@ -170,10 +170,11 @@ func serve(ctx context.Context, cmd *cli.Command) error {
 	}
 }
 
-func mountMCP(mux *http.ServeMux, cfg config.MCP, s *store.Store, d *dav.Handler, log *slog.Logger) {
+func mountMCP(mux *http.ServeMux, cfg config.MCP, region string, s *store.Store, d *dav.Handler, log *slog.Logger) {
 	mux.Handle("/mcp", mcpserver.Handler(mcpserver.Backend{
 		Store: s, Parse: d.Cache(), Full: d.Full(),
 		WriteCard: d.WriteCard, WriteEvent: d.WriteEvent, Delete: d.DeleteObject,
+		PhoneRegion: region,
 	}, cfg.Tokens))
 	log.Info("MCP enabled", "path", "/mcp", "tokens", len(cfg.Tokens))
 }
@@ -242,7 +243,7 @@ func newUI(cfg config.Config, s *store.Store, d *dav.Handler, log *slog.Logger) 
 		}
 	}
 
-	ui, err := web.New(s, d.Cache(), d.Birthdays, web.Options{Prefix: uiPath, DAVPrefix: cfg.Server.Prefix, Sessions: sessions, Writer: d.WriteCard, Full: d.Full(), ThumbnailCacheBytes: cfg.Performance.ThumbnailCacheMB << 20}, log)
+	ui, err := web.New(s, d.Cache(), d.Birthdays, web.Options{Prefix: uiPath, DAVPrefix: cfg.Server.Prefix, Sessions: sessions, Writer: d.WriteCard, Full: d.Full(), ThumbnailCacheBytes: cfg.Performance.ThumbnailCacheMB << 20, PhoneRegion: cfg.Contacts.PhoneRegion}, log)
 	if err != nil {
 		return nil, fmt.Errorf("ui: %w", err)
 	}

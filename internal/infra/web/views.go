@@ -346,6 +346,75 @@ func (h *Handler) restorePhoto(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, back+"?restored=1#photos", http.StatusSeeOther)
 }
 
+// fixPhones writes the card's numbers without a country code in E.164,
+// the fixes lint suggests, through the validated write path.
+func (h *Handler) fixPhones(w http.ResponseWriter, r *http.Request) {
+	bookName, name := r.PathValue("book"), r.PathValue("name")
+	back := h.prefix + "/contacts/" + url.PathEscape(bookName) + "/" + url.PathEscape(name)
+
+	if h.write == nil || !sameOrigin(r) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+
+		return
+	}
+
+	fail := func(msg string) {
+		http.Redirect(w, r, back+"?error="+url.QueryEscape(msg), http.StatusSeeOther)
+	}
+
+	book, err := h.store.Collection(store.AddressBook, bookName)
+	if err != nil {
+		http.NotFound(w, r)
+
+		return
+	}
+
+	snap, err := book.Snapshot()
+	if err != nil {
+		fail(err.Error())
+
+		return
+	}
+
+	obj, ok := snap.Lookup(name)
+	if !ok {
+		http.NotFound(w, r)
+
+		return
+	}
+
+	if r.PostFormValue("if_match") != obj.ETag {
+		fail("the card changed since the page was loaded; look again and retry")
+
+		return
+	}
+
+	cur, _, err := h.full(book, obj.ETag)
+	if err != nil || cur == nil {
+		fail("could not read the card")
+
+		return
+	}
+
+	fixed, fixes := contact.FixPhones(*cur, h.region)
+	if len(fixes) == 0 {
+		http.Redirect(w, r, back, http.StatusSeeOther)
+
+		return
+	}
+
+	user := userFrom(r.Context())
+
+	if _, err := h.write(bookName, name, fixed.Encode(), obj.ETag, "farvardin web UI ("+user+")"); err != nil {
+		fail(err.Error())
+
+		return
+	}
+
+	h.log.Info("phone numbers fixed", "card", name, "count", len(fixes), "user", user)
+	http.Redirect(w, r, back+"?phones="+strconv.Itoa(len(fixes)), http.StatusSeeOther)
+}
+
 func (h *Handler) inHistory(book *store.Collection, name, etag string) bool {
 	revs, err := book.History(name, 200)
 	if err != nil || etag == "" {

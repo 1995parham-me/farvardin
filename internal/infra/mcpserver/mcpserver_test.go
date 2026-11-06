@@ -225,3 +225,48 @@ func TestHandlerNeedsToken(t *testing.T) {
 		}
 	}
 }
+
+func TestPhoneTools(t *testing.T) {
+	t.Parallel()
+
+	b, s := backend(t)
+	cs := connect(t, b)
+
+	book, _ := s.Collection(store.AddressBook, "addressbook")
+
+	const vcard = "BEGIN:VCARD\r\nVERSION:3.0\r\nUID:n\r\nFN:Nima\r\nN:;Nima;;;\r\nTEL;type=CELL:0912 345 6789\r\nEND:VCARD\r\n"
+	if _, _, err := book.Put("n.vcf", []byte(vcard), store.Condition{}, "test"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Without a region the national number cannot be fixed.
+	if _, isErr, msg := call[FixPhonesOut](t, cs, "fix_contact_phones", map[string]any{"id": "n.vcf"}); !isErr || !strings.Contains(msg, "phone_region") {
+		t.Fatalf("fix without region: %v %s", isErr, msg)
+	}
+
+	b.PhoneRegion = "IR"
+	cs = connect(t, b)
+
+	lint, _, _ := call[LintOut](t, cs, "lint_contacts", map[string]any{"warnings": true})
+	if lint.FixableCount != 1 || len(lint.Findings) != 1 || !strings.Contains(lint.Findings[0].Issues[0], "(fix: +989123456789)") {
+		t.Fatalf("lint: %+v", lint)
+	}
+
+	found, _, _ := call[SearchOut](t, cs, "search_contacts", map[string]any{"query": "+98 912 345"})
+	if found.Total != 1 {
+		t.Fatalf("search by international form: %+v", found)
+	}
+
+	fixed, isErr, msg := call[FixPhonesOut](t, cs, "fix_contact_phones", map[string]any{"id": "n.vcf"})
+	if isErr || len(fixed.Fixed) != 1 || fixed.Phones[0] != "+989123456789" || len(fixed.Issues) != 0 {
+		t.Fatalf("fix: %s %+v", msg, fixed)
+	}
+
+	// Numbers the assistant writes are stored in E.164.
+	created, isErr, msg := call[ContactDetail](t, cs, "create_contact", map[string]any{
+		"full_name": "Shirin", "phones": []map[string]string{{"value": "0935 111 2233", "type": "mobile"}, {"value": "*141#"}},
+	})
+	if isErr || created.Phones[0] != "+989351112233" || created.Phones[1] != "*141#" {
+		t.Fatalf("create: %s %+v", msg, created)
+	}
+}

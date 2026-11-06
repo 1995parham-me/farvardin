@@ -21,6 +21,8 @@ import (
 // errLintFailed makes `farvardin lint` exit non-zero for CI.
 var errLintFailed = errors.New("lint found errors")
 
+var errUnknownRegion = errors.New("not a known country code")
+
 func lintCommand() *cli.Command {
 	//nolint:exhaustruct // command literal
 	return &cli.Command{
@@ -30,8 +32,15 @@ func lintCommand() *cli.Command {
 		Flags: []cli.Flag{
 			//nolint:exhaustruct // flag literal
 			&cli.BoolFlag{Name: "warnings", Aliases: []string{"w"}, Usage: "also print warnings"},
+			//nolint:exhaustruct // flag literal
+			&cli.StringFlag{Name: "region", Aliases: []string{"r"}, Usage: "country (ISO 3166-1, like IR) of phone numbers without a country code; warnings then suggest their E.164 form"},
 		},
 		Action: func(_ context.Context, cmd *cli.Command) error {
+			region := cmd.String("region")
+			if region != "" && !contact.ValidRegion(region) {
+				return fmt.Errorf("lint: %w: %q", errUnknownRegion, region)
+			}
+
 			var files []string
 
 			for _, arg := range cmd.Args().Slice() {
@@ -61,9 +70,9 @@ func lintCommand() *cli.Command {
 				var issues []contact.Issue
 
 				if card, err := contact.Parse(data); err != nil {
-					issues = []contact.Issue{{Severity: contact.Error, Message: err.Error()}}
+					issues = []contact.Issue{{Severity: contact.Error, Message: err.Error(), Fix: ""}}
 				} else {
-					issues = contact.Validate(card)
+					issues = contact.Lint(card, region)
 				}
 
 				for _, i := range issues {

@@ -44,6 +44,7 @@ Your phones sync contacts and calendars over CardDAV and CalDAV, and the server 
 - **JSContact** ([RFC 9553](https://www.rfc-editor.org/rfc/rfc9553)) on request
 - **Photo guard**: thumbnails never replace a full photo; re-encodes keep the stored bytes; oversized photos are scaled once
 - Byte-exact storage: lines nobody edited keep their bytes
+- **Phone numbers**: with `phone_region` set, lint suggests the E.164 form of numbers without a country code and fixes them on request; search finds a number however it is written
 
 </td>
 <td width="33%" valign="top">
@@ -184,7 +185,7 @@ claude mcp add --transport http farvardin https://dav.example.com/mcp \
 | Contacts | Calendars |
 | --- | --- |
 | `search_contacts` · `get_contact` · `create_contact` · `update_contact` · `delete_contact` | `list_calendars` · `list_events` · `get_event` |
-| `contact_history` · `restore_contact_photo` · `upcoming_birthdays` · `lint_contacts` | `create_event` · `update_event` · `delete_event` |
+| `contact_history` · `restore_contact_photo` · `upcoming_birthdays` · `lint_contacts` · `fix_contact_phones` | `create_event` · `update_event` · `delete_event` |
 
 Writes take the etag that was read, so an assistant never overwrites a newer edit from a phone. They go through the same validation as a phone's write, are pushed to the phones at once, and are git commits with `Requester: farvardin MCP (<token>)`, so every change can be seen and undone. The config keeps only each token's SHA-256.
 
@@ -248,7 +249,7 @@ Each write is a commit (`Added`, `Modified` or `Deleted <file>`, with the client
 
 ```text
 farvardin serve            run the server (--listen and --root override the config)
-farvardin lint DIR|FILE    check vCards; exits 1 when a card has errors (-w for warnings)
+farvardin lint DIR|FILE    check vCards; exits 1 when a card has errors (-w for warnings, -r IR to read national phone numbers)
 farvardin convert FILE     convert vCards: --to 3.0 | 4.0 | jscontact
 farvardin hash-password    bcrypt hash for [auth.users] / [ui.users]
 farvardin mcp-token NAME   bearer token for [mcp.tokens]

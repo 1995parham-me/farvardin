@@ -51,6 +51,10 @@ type Backend struct {
 	WriteCard  func(book, name string, data []byte, ifMatch, requester string) (string, error)
 	WriteEvent func(cal, name string, data []byte, ifMatch string, create bool, requester string) (string, error)
 	Delete     func(kind store.Kind, col, name, ifMatch, requester string) error
+	// PhoneRegion is the country of numbers written without a country
+	// code: lint suggests their E.164 form, written phones are stored in
+	// it, and search matches either form.
+	PhoneRegion string
 }
 
 // Version is reported to clients.
@@ -135,8 +139,9 @@ func (t tools) register(s *mcp.Server) {
 	mcp.AddTool(s, tool("delete_contact", "Delete a contact (it stays in git history). Pass the etag you read.", writes(true)), t.deleteContact)
 	mcp.AddTool(s, tool("contact_history", "List the changes of a contact, newest first: when, which device, and the revision id of each.", readOnly()), t.contactHistory)
 	mcp.AddTool(s, tool("restore_contact_photo", "Put back the photo a contact had at an earlier revision (from contact_history), for example a full photo a phone replaced with a thumbnail.", writes(false)), t.restorePhoto)
+	mcp.AddTool(s, tool("fix_contact_phones", "Write a contact's phone numbers that have no country code in international (E.164) form, the fixes lint_contacts suggests. Labels and every other field stay as they are. Pass the etag you read.", writes(false)), t.fixPhones)
 	mcp.AddTool(s, tool("upcoming_birthdays", "Birthdays and anniversaries in the next N days, with ages where the year is known.", readOnly()), t.upcomingBirthdays)
-	mcp.AddTool(s, tool("lint_contacts", "List contacts that fail validation (errors stop phones from saving them) or have warnings, and contacts with low-resolution photos.", readOnly()), t.lintContacts)
+	mcp.AddTool(s, tool("lint_contacts", "List contacts that fail validation (errors stop phones from saving them) or have warnings (phone numbers without a country code, invalid or repeated numbers, and more), and contacts with low-resolution photos. A warning with a fix can be applied with fix_contact_phones.", readOnly()), t.lintContacts)
 	mcp.AddTool(s, tool("list_calendars", "List the calendars, including the generated read-only birthdays calendar.", readOnly()), t.listCalendars)
 	mcp.AddTool(s, tool("list_events", "List events between two dates (default: the next 30 days), across all calendars or one. Repeating events are listed at their next occurrence in the range.", readOnly()), t.listEvents)
 	mcp.AddTool(s, tool("get_event", "Read one event by calendar and id, with its raw iCalendar.", readOnly()), t.getEvent)
@@ -274,7 +279,9 @@ func (t tools) searchContacts(_ context.Context, _ *mcp.CallToolRequest, in Sear
 			}
 
 			for _, v := range c.Values("TEL") {
-				hit = hit || (len(qd) >= 4 && strings.Contains(digits(v.Value), qd))
+				for _, k := range contact.PhoneKeys(v.Value, t.b.PhoneRegion) {
+					hit = hit || (len(qd) >= 4 && strings.Contains(k, qd))
+				}
 			}
 
 			if !hit {
@@ -359,7 +366,7 @@ func (t tools) load(bookName, id string) (*store.Collection, store.Object, *cont
 	return book, obj, c, nil
 }
 
-func detail(book string, obj store.Object, c contact.Card) ContactDetail {
+func detail(book string, obj store.Object, c contact.Card, region string) ContactDetail {
 	n := c.Name()
 	d := ContactDetail{
 		ContactSummary: summarize(book, obj.Name, obj.ETag, c),
@@ -377,7 +384,7 @@ func detail(book string, obj store.Object, c contact.Card) ContactDetail {
 		d.Dates = append(d.Dates, Labelled{Value: dateString(dt), Type: kind})
 	}
 
-	for _, i := range contact.Validate(c) {
+	for _, i := range contact.Lint(c, region) {
 		d.Issues = append(d.Issues, i.String())
 	}
 
@@ -390,7 +397,7 @@ func (t tools) getContact(_ context.Context, _ *mcp.CallToolRequest, in GetConta
 		return nil, ContactDetail{}, err
 	}
 
-	d := detail(book.Name(), obj, *c)
+	d := detail(book.Name(), obj, *c, t.b.PhoneRegion)
 
 	switch strings.ToLower(in.Format) {
 	case "":
@@ -441,7 +448,7 @@ func toLabelled(in []Labelled) []contact.Labelled {
 	return out
 }
 
-func apply(c *contact.Card, f ContactFields) error {
+func apply(c *contact.Card, f ContactFields, region string) error {
 	if f.FullName != nil || f.GivenName != nil || f.FamilyName != nil {
 		c.SetName(deref(f.FullName), deref(f.GivenName), deref(f.FamilyName))
 	}
@@ -487,7 +494,16 @@ func apply(c *contact.Card, f ContactFields) error {
 	}
 
 	if f.Phones != nil {
-		c.SetLabelled("TEL", toLabelled(f.Phones))
+		phones := toLabelled(f.Phones)
+		for i := range phones {
+			// The assistant's numbers go in as E.164 when they can be read;
+			// a phone that wrote a number its own way keeps it.
+			if e164, ok := contact.NormalizeTel(phones[i].Value, region); ok {
+				phones[i].Value = e164
+			}
+		}
+
+		c.SetLabelled("TEL", phones)
 	}
 
 	if f.Emails != nil {
@@ -538,7 +554,7 @@ func (t tools) createContact(_ context.Context, req *mcp.CallToolRequest, in Cre
 	uid := newUID()
 	c := contact.New(uid, name)
 
-	if err := apply(&c, in.ContactFields); err != nil {
+	if err := apply(&c, in.ContactFields, t.b.PhoneRegion); err != nil {
 		return nil, ContactDetail{}, err
 	}
 
@@ -553,7 +569,7 @@ func (t tools) createContact(_ context.Context, req *mcp.CallToolRequest, in Cre
 		return nil, ContactDetail{}, err
 	}
 
-	return nil, detail(book.Name(), obj, *stored), nil
+	return nil, detail(book.Name(), obj, *stored, t.b.PhoneRegion), nil
 }
 
 func newUID() string {
@@ -592,7 +608,7 @@ func (t tools) updateContact(_ context.Context, req *mcp.CallToolRequest, in Upd
 	if in.VCard != "" {
 		data = []byte(in.VCard)
 	} else {
-		if err := apply(c, in.ContactFields); err != nil {
+		if err := apply(c, in.ContactFields, t.b.PhoneRegion); err != nil {
 			return nil, ContactDetail{}, err
 		}
 
@@ -609,7 +625,7 @@ func (t tools) updateContact(_ context.Context, req *mcp.CallToolRequest, in Upd
 		return nil, ContactDetail{}, err
 	}
 
-	return nil, detail(book.Name(), obj, *stored), nil
+	return nil, detail(book.Name(), obj, *stored, t.b.PhoneRegion), nil
 }
 
 // DeleteIn deletes one object.
@@ -735,7 +751,55 @@ func (t tools) restorePhoto(_ context.Context, req *mcp.CallToolRequest, in Rest
 		return nil, ContactDetail{}, err
 	}
 
-	return nil, detail(book.Name(), obj, *stored), nil
+	return nil, detail(book.Name(), obj, *stored, t.b.PhoneRegion), nil
+}
+
+// FixPhonesIn is the input of fix_contact_phones.
+type FixPhonesIn struct {
+	ID   string `json:"id"`
+	Book string `json:"book,omitempty"`
+	ETag string `json:"etag,omitempty" jsonschema:"the etag you read; the fix fails if the contact changed since"`
+}
+
+// FixPhonesOut is the contact after the fix and the numbers changed.
+type FixPhonesOut struct {
+	ContactDetail
+
+	Fixed []contact.PhoneFix `json:"fixed"`
+}
+
+var errNoRegion = errors.New("contacts.phone_region is not set in the server configuration, so numbers without a country code cannot be read")
+
+func (t tools) fixPhones(_ context.Context, req *mcp.CallToolRequest, in FixPhonesIn) (*mcp.CallToolResult, FixPhonesOut, error) {
+	if t.b.PhoneRegion == "" {
+		return nil, FixPhonesOut{}, errNoRegion
+	}
+
+	book, obj, cur, err := t.load(in.Book, in.ID)
+	if err != nil {
+		return nil, FixPhonesOut{}, err
+	}
+
+	ifMatch := in.ETag
+	if ifMatch == "" {
+		ifMatch = obj.ETag
+	}
+
+	fixed, fixes := contact.FixPhones(*cur, t.b.PhoneRegion)
+	if len(fixes) == 0 {
+		return nil, FixPhonesOut{ContactDetail: detail(book.Name(), obj, *cur, t.b.PhoneRegion), Fixed: nil}, nil
+	}
+
+	if _, err := t.b.WriteCard(book.Name(), in.ID, fixed.Encode(), ifMatch, requester(req)); err != nil {
+		return nil, FixPhonesOut{}, err
+	}
+
+	_, obj, stored, err := t.load(book.Name(), in.ID)
+	if err != nil {
+		return nil, FixPhonesOut{}, err
+	}
+
+	return nil, FixPhonesOut{ContactDetail: detail(book.Name(), obj, *stored, t.b.PhoneRegion), Fixed: fixes}, nil
 }
 
 // BirthdaysIn is the input of upcoming_birthdays.
@@ -826,11 +890,12 @@ type LintOut struct {
 	CheckedCount  int           `json:"checked"`
 	ErrorsCount   int           `json:"with_errors"`
 	LowResCount   int           `json:"low_res"`
+	FixableCount  int           `json:"fixable_phones"           jsonschema:"contacts with phone numbers fix_contact_phones can fix"`
 	LowResPreview string        `json:"note,omitempty"`
 }
 
 func (t tools) lintContacts(_ context.Context, _ *mcp.CallToolRequest, in LintIn) (*mcp.CallToolResult, LintOut, error) {
-	out := LintOut{Findings: nil, LowResPhotos: nil, CheckedCount: 0, ErrorsCount: 0, LowResCount: 0, LowResPreview: ""}
+	out := LintOut{Findings: nil, LowResPhotos: nil, CheckedCount: 0, ErrorsCount: 0, LowResCount: 0, FixableCount: 0, LowResPreview: ""}
 
 	for _, book := range t.b.Store.Collections(store.AddressBook) {
 		snap, err := book.Snapshot()
@@ -856,9 +921,16 @@ func (t tools) lintContacts(_ context.Context, _ *mcp.CallToolRequest, in LintIn
 				}
 			}
 
-			var issues []string
+			var (
+				issues  []string
+				fixable bool
+			)
 
-			for _, i := range contact.Validate(*c) {
+			for _, i := range contact.Lint(*c, t.b.PhoneRegion) {
+				if i.Fix != "" {
+					fixable = true
+				}
+
 				if i.Severity == contact.Error || in.Warnings {
 					issues = append(issues, i.String())
 				}
@@ -870,6 +942,10 @@ func (t tools) lintContacts(_ context.Context, _ *mcp.CallToolRequest, in LintIn
 
 			if len(issues) > 0 {
 				out.Findings = append(out.Findings, LintFinding{ID: o.Name, Name: c.DisplayName(), Issues: issues})
+			}
+
+			if fixable {
+				out.FixableCount++
 			}
 		}
 	}

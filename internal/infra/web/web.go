@@ -54,6 +54,9 @@ type Options struct {
 	Full Parser
 	// ThumbnailCacheBytes bounds the scaled-photo cache.
 	ThumbnailCacheBytes int
+	// PhoneRegion is the country of numbers written without a country
+	// code; lint suggests their E.164 form and the contact page fixes them.
+	PhoneRegion string
 }
 
 // Handler is the UI http.Handler, mounted at Prefix.
@@ -65,6 +68,7 @@ type Handler struct {
 	write     CardWriter
 	prefix    string
 	davPrefix string
+	region    string
 	sessions  *Sessions
 	log       *slog.Logger
 	tmpl      *template.Template
@@ -77,7 +81,7 @@ type Handler struct {
 func New(s *store.Store, parse Parser, birthdays BirthdaySource, opts Options, log *slog.Logger) (*Handler, error) {
 	h := &Handler{
 		store: s, parse: parse, full: opts.Full, birthdays: birthdays, write: opts.Writer,
-		prefix: strings.TrimSuffix(opts.Prefix, "/"), davPrefix: strings.TrimSuffix(opts.DAVPrefix, "/"),
+		prefix: strings.TrimSuffix(opts.Prefix, "/"), davPrefix: strings.TrimSuffix(opts.DAVPrefix, "/"), region: opts.PhoneRegion,
 		sessions: opts.Sessions, log: log, tmpl: nil, mux: http.NewServeMux(),
 		thumbs: newThumbCache(opts.ThumbnailCacheBytes), lists: newListCache(),
 	}
@@ -121,6 +125,7 @@ func New(s *store.Store, parse Parser, birthdays BirthdaySource, opts Options, l
 	h.mux.HandleFunc("GET "+p+"/contacts/{book}/{$}", h.contacts)
 	h.mux.HandleFunc("GET "+p+"/contacts/{book}/{name}", h.contactPage)
 	h.mux.HandleFunc("POST "+p+"/contacts/{book}/{name}/photo", h.restorePhoto)
+	h.mux.HandleFunc("POST "+p+"/contacts/{book}/{name}/phones", h.fixPhones)
 	h.mux.HandleFunc("GET "+p+"/photo/{book}/{name}", h.photo)
 	h.mux.HandleFunc("GET "+p+"/calendars/{cal}/{$}", h.events)
 	h.mux.HandleFunc("GET "+p+"/lint", h.lint)
@@ -261,7 +266,12 @@ func (h *Handler) people(book *store.Collection) ([]person, *store.Snapshot, err
 		}
 
 		p.Letter = letter(p.Name)
-		p.Search = strings.ToLower(strings.Join([]string{p.Name, p.Org, p.Email, p.Phone, card.Value("NICKNAME")}, " "))
+		words := []string{p.Name, p.Org, p.Email, p.Phone, card.Value("NICKNAME")}
+		for _, t := range card.Values("TEL") {
+			words = append(words, contact.PhoneKeys(t.Value, h.region)...)
+		}
+
+		p.Search = strings.ToLower(strings.Join(words, " "))
 		out = append(out, p)
 	}
 
@@ -309,6 +319,7 @@ func (h *Handler) contacts(w http.ResponseWriter, r *http.Request) {
 
 	filter := r.URL.Query().Get("f")
 	q := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("q")))
+	qd := phoneQuery(q)
 	counts := map[string]int{"all": len(all)}
 
 	var shown []person
@@ -328,7 +339,7 @@ func (h *Handler) contacts(w http.ResponseWriter, r *http.Request) {
 			(filter == "photo" && p.HasPhoto) || (filter == "nophoto" && !p.HasPhoto) ||
 			(filter == "lowres" && p.LowRes) || (filter == "errors" && p.Issues > 0)
 
-		if keep && (q == "" || strings.Contains(p.Search, q)) {
+		if keep && (q == "" || strings.Contains(p.Search, q) || (len(qd) >= 4 && strings.Contains(p.Search, qd))) {
 			shown = append(shown, p)
 		}
 	}
@@ -357,7 +368,7 @@ func (h *Handler) contacts(w http.ResponseWriter, r *http.Request) {
 type field struct {
 	Label string
 	Value string
-	Link  string
+	Link  template.URL
 	Copy  bool
 	Kind  string
 }
@@ -401,11 +412,12 @@ func (h *Handler) contactPage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	_, hasPhoto := card.Get("PHOTO")
+	_, phoneFixes := contact.FixPhones(*card, h.region)
 
 	h.render(w, r, "contact.html", map[string]any{
-		"Title": card.DisplayName(), "Book": book.Name(), "File": name, "Card": card, "Fields": fields(*card),
+		"Title": card.DisplayName(), "Book": book.Name(), "File": name, "Card": card, "Fields": fields(*card, h.region),
 		"Org": strings.Join(nonEmpty(orgParts(*card)), " · "), "JobTitle": card.Value("TITLE"),
-		"Issues": contact.Validate(*card), "Timeline": h.timeline(book, revs), "Photos": h.photoHistory(book, *card, revs),
+		"Issues": contact.Lint(*card, h.region), "PhoneFixes": phoneFixes, "PhonesFixed": r.URL.Query().Get("phones"), "Timeline": h.timeline(book, revs), "Photos": h.photoHistory(book, *card, revs),
 		"Object": obj, "HasPhoto": hasPhoto, "PhotoInfo": photoInfo, "Version": card.Version(), "CanWrite": h.write != nil,
 		"Restored": r.URL.Query().Get("restored") != "", "Failed": r.URL.Query().Get("error"),
 		"Raw": h.davPrefix + "/" + h.store.Principal() + "/contacts/" + book.Name() + "/" + name,
@@ -413,7 +425,7 @@ func (h *Handler) contactPage(w http.ResponseWriter, r *http.Request) {
 }
 
 // fields lists a card's properties in reading order with labels.
-func fields(c contact.Card) []field {
+func fields(c contact.Card, region string) []field {
 	var out []field
 
 	label := func(v contact.Value, fallback string) string {
@@ -437,11 +449,11 @@ func fields(c contact.Card) []field {
 	}
 
 	for _, v := range c.Values("TEL") {
-		add(field{Label: label(v, "Phone"), Value: v.Value, Link: "tel:" + v.Value, Copy: true, Kind: "phone"})
+		add(field{Label: label(v, "Phone"), Value: v.Value, Link: telLink(v.Value, region), Copy: true, Kind: "phone"})
 	}
 
 	for _, v := range c.Values("EMAIL") {
-		add(field{Label: label(v, "Email"), Value: v.Value, Link: "mailto:" + v.Value, Copy: true, Kind: "email"})
+		add(field{Label: label(v, "Email"), Value: v.Value, Link: safeLink("mailto:" + v.Value), Copy: true, Kind: "email"})
 	}
 
 	add(field{Label: "Nickname", Value: c.Value("NICKNAME"), Link: "", Copy: false, Kind: "text"})
@@ -451,13 +463,13 @@ func fields(c contact.Card) []field {
 	}
 
 	for _, v := range c.Values("URL") {
-		add(field{Label: label(v, "Link"), Value: v.Value, Link: v.Value, Copy: false, Kind: "link"})
+		add(field{Label: label(v, "Link"), Value: v.Value, Link: safeLink(v.Value), Copy: false, Kind: "link"})
 	}
 
 	for _, n := range []string{"SOCIALPROFILE", "X-SOCIALPROFILE", "IMPP"} {
 		for _, l := range c.All(n) {
 			svc := strings.Join(append(l.Param("SERVICE-TYPE"), l.Param("TYPE")...), ", ")
-			add(field{Label: "Profile · " + svc, Value: l.Text(), Link: l.Text(), Copy: false, Kind: "link"})
+			add(field{Label: "Profile · " + svc, Value: l.Text(), Link: safeLink(l.Text()), Copy: false, Kind: "link"})
 		}
 	}
 
@@ -479,6 +491,39 @@ func fields(c contact.Card) []field {
 	add(field{Label: "Note", Value: c.Value("NOTE"), Link: "", Copy: false, Kind: "note"})
 
 	return out
+}
+
+// telLink is the tel: URI of a number: E.164 when it can be read, else
+// its digits. html/template refuses tel: in a plain string, so the URI is
+// built from digits only and then marked safe.
+func telLink(v, region string) template.URL {
+	n, ok := contact.NormalizeTel(v, region)
+	if !ok {
+		n = strings.Map(func(r rune) rune {
+			if r >= '0' && r <= '9' || r == '+' || r == '*' || r == '#' {
+				return r
+			}
+
+			return -1
+		}, strings.TrimPrefix(strings.ToLower(strings.TrimSpace(v)), "tel:"))
+	}
+
+	if n == "" {
+		return ""
+	}
+
+	return template.URL("tel:" + strings.ReplaceAll(n, "#", "%23")) //nolint:gosec // digits, +, * and an escaped # only
+}
+
+// safeLink keeps the http, https and mailto links of a card and drops the
+// rest (javascript: and the like); it matches what html/template allows.
+func safeLink(v string) template.URL {
+	v = strings.TrimSpace(v)
+	if u, err := url.Parse(v); err == nil && (u.Scheme == "" || u.Scheme == "http" || u.Scheme == "https" || u.Scheme == "mailto") {
+		return template.URL(v) //nolint:gosec // scheme checked above
+	}
+
+	return ""
 }
 
 func orgParts(c contact.Card) []string {
@@ -511,18 +556,34 @@ func (h *Handler) lint(w http.ResponseWriter, r *http.Request) {
 		for _, o := range snap.Objects {
 			card, _, err := h.parse(book, o.ETag)
 			if err != nil || card == nil {
-				findings = append(findings, finding{Book: book.Name(), File: o.Name, Name: o.Name, Issues: []contact.Issue{{Severity: contact.Error, Message: fmt.Sprint(err)}}})
+				findings = append(findings, finding{Book: book.Name(), File: o.Name, Name: o.Name, Issues: []contact.Issue{{Severity: contact.Error, Message: fmt.Sprint(err), Fix: ""}}})
 
 				continue
 			}
 
-			if issues := contact.Validate(*card); len(issues) > 0 {
+			if issues := contact.Lint(*card, h.region); len(issues) > 0 {
 				findings = append(findings, finding{Book: book.Name(), File: o.Name, Name: card.DisplayName(), Issues: issues})
 			}
 		}
 	}
 
 	h.render(w, r, "lint.html", map[string]any{"Title": "Lint", "Findings": findings})
+}
+
+// phoneQuery returns the digits of a search that looks like a phone
+// number ("0912 345", "+98-912"), or "".
+func phoneQuery(q string) string {
+	if q == "" || strings.Trim(q, "0123456789 +-().") != "" {
+		return ""
+	}
+
+	return strings.Map(func(r rune) rune {
+		if r >= '0' && r <= '9' {
+			return r
+		}
+
+		return -1
+	}, q)
 }
 
 func initials(name string) string {

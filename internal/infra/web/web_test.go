@@ -51,6 +51,12 @@ func card(photo string) string {
 func setup(t *testing.T) (*httptest.Server, *http.Client, *store.Collection) {
 	t.Helper()
 
+	return setupRegion(t, "")
+}
+
+func setupRegion(t *testing.T, region string) (*httptest.Server, *http.Client, *store.Collection) {
+	t.Helper()
+
 	root := t.TempDir()
 
 	s, err := store.Open(root, "user", store.Author{Name: "T", Email: "t@example.com"})
@@ -92,7 +98,7 @@ func setup(t *testing.T) (*httptest.Server, *http.Client, *store.Collection) {
 		t.Fatal(err)
 	}
 
-	ui, err := web.New(s, d.Cache(), d.Birthdays, web.Options{Prefix: "/ui", DAVPrefix: "", Sessions: sessions, Writer: d.WriteCard, Full: d.Full(), ThumbnailCacheBytes: 1 << 20}, log)
+	ui, err := web.New(s, d.Cache(), d.Birthdays, web.Options{Prefix: "/ui", DAVPrefix: "", Sessions: sessions, Writer: d.WriteCard, Full: d.Full(), ThumbnailCacheBytes: 1 << 20, PhoneRegion: region}, log)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -239,5 +245,67 @@ func TestLoginPagesAndPhotoRestore(t *testing.T) {
 
 	if _, body := get(t, c, srv.URL+"/ui/"); !strings.Contains(body, `name="password"`) {
 		t.Fatal("still signed in after logout")
+	}
+}
+
+func TestPhoneLintAndFix(t *testing.T) {
+	t.Parallel()
+
+	srv, c, book := setupRegion(t, "IR")
+
+	const vcard = "BEGIN:VCARD\r\nVERSION:3.0\r\nUID:b\r\nFN:Babak\r\nN:;Babak;;;\r\n" +
+		"item1.TEL;type=CELL:0912 345 6789\r\nitem1.X-ABLabel:Persian\r\nEND:VCARD\r\n"
+
+	if _, _, err := book.Put("b.vcf", []byte(vcard), store.Condition{}, "iOS/27.0.1 (24A446) dataaccessd/1.0"); err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := c.PostForm(srv.URL+"/ui/login", url.Values{"username": {"parham"}, "password": {"s3cret"}, "next": {"/ui/"}}) //nolint:noctx // test
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_ = resp.Body.Close()
+
+	pages := map[string][]string{
+		"/ui/lint":                                  {"has no country code → &#43;989123456789"},
+		"/ui/contacts/addressbook/b.vcf":            {"Add country codes (1)", `href="tel:&#43;989123456789"`},
+		"/ui/contacts/addressbook/?q=%2B98912345":   {"Babak"},
+		"/ui/contacts/addressbook/?q=0912+345+6789": {"Babak"},
+	}
+
+	for page, wants := range pages {
+		_, body := get(t, c, srv.URL+page)
+		for _, want := range wants {
+			if !strings.Contains(body, want) {
+				t.Errorf("%s lacks %q:\n%s", page, want, body)
+			}
+		}
+	}
+
+	snap, _ := book.Snapshot()
+	cur, _ := snap.Lookup("b.vcf")
+
+	req, _ := http.NewRequestWithContext(t.Context(), http.MethodPost, srv.URL+"/ui/contacts/addressbook/b.vcf/phones", strings.NewReader(url.Values{"if_match": {cur.ETag}}.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Origin", srv.URL)
+
+	resp, err = c.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || !strings.Contains(resp.Request.URL.RawQuery, "phones=1") {
+		t.Fatalf("fix: %d at %s", resp.StatusCode, resp.Request.URL)
+	}
+
+	data, _, _ := book.Read("b.vcf")
+	if want := strings.Replace(vcard, "0912 345 6789", "+989123456789", 1); string(data) != want {
+		t.Fatalf("stored:\n%s\nwant:\n%s", data, want)
+	}
+
+	if _, body := get(t, c, srv.URL+"/ui/lint"); strings.Contains(body, "country code") {
+		t.Fatal("still reported after the fix")
 	}
 }

@@ -18,9 +18,18 @@ const (
 type Issue struct {
 	Severity Severity `json:"severity"`
 	Message  string   `json:"message"`
+	// Fix is the value the problem's property should have, when it can
+	// be fixed without asking (a phone number in E.164).
+	Fix string `json:"fix,omitempty"`
 }
 
-func (i Issue) String() string { return string(i.Severity) + ": " + i.Message }
+func (i Issue) String() string {
+	if i.Fix != "" {
+		return string(i.Severity) + ": " + i.Message + " (fix: " + i.Fix + ")"
+	}
+
+	return string(i.Severity) + ": " + i.Message
+}
 
 // MaxPhotoBytes is the size above which a photo is reported.
 const MaxPhotoBytes = 1 << 20
@@ -31,7 +40,7 @@ func Validate(c Card) []Issue {
 	var issues []Issue
 
 	add := func(s Severity, format string, args ...any) {
-		issues = append(issues, Issue{Severity: s, Message: fmt.Sprintf(format, args...)})
+		issues = append(issues, Issue{Severity: s, Message: fmt.Sprintf(format, args...), Fix: ""})
 	}
 
 	switch v := c.Version(); v {

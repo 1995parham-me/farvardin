@@ -18,7 +18,9 @@
 
   {{if .Restored}}<p class="flash good" role="status">{{template "icon" "check"}}Photo restored. The phones get it on their next sync, pushed right away.</p>{{end}}
   {{if .Failed}}<p class="flash bad" role="alert">{{template "icon" "alert"}}{{.Failed}}</p>{{end}}
-  {{if .Issues}}<ul class="issues">{{range .Issues}}<li class="{{.Severity}}">{{template "icon" "alert"}}{{.Message}}</li>{{end}}</ul>{{end}}
+  {{if .PhonesFixed}}<p class="flash good" role="status">{{template "icon" "check"}}Phone numbers fixed ({{.PhonesFixed}}). The phones get them on their next sync, pushed right away.</p>{{end}}
+  {{if .Issues}}<ul class="issues">{{range .Issues}}<li class="{{.Severity}}">{{template "icon" "alert"}}<span class="grow">{{.Message}}{{if .Fix}} → <span class="mono">{{.Fix}}</span>{{end}}</span></li>{{end}}</ul>{{end}}
+  {{if and .PhoneFixes $.CanWrite}}<form class="fix" method="post" action="{{$.File}}/phones"><input type="hidden" name="if_match" value="{{$.Object.ETag}}"><button class="button primary" type="submit">{{template "icon" "phone"}}Add country codes ({{len .PhoneFixes}})</button><span class="muted">Writes {{range $i, $f := .PhoneFixes}}{{if $i}}, {{end}}<span class="mono">{{$f.To}}</span>{{end}}; labels and everything else stay as they are.</span></form>{{end}}
 
   <div class="grid2 wide">
     <section class="panel">

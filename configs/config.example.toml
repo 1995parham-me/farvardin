@@ -45,6 +45,11 @@ photo_stabilize = true
 # The longest side that counts as a thumbnail for photo_guard.
 thumbnail_size = 128
 photo_quality = 85
+# The country (ISO 3166-1, like "IR" or "DE") of phone numbers written
+# without a country code. Lint then suggests the international (E.164)
+# form, and the web UI and MCP can fix them. Nothing changes a card unless
+# you ask. "" checks only numbers that have a country code.
+phone_region = ""
 
 [calendars]
 # A read-only calendar of birthdays and anniversaries from the address book.

@@ -15,6 +15,8 @@ import (
 	"github.com/knadh/koanf/providers/file"
 	"github.com/knadh/koanf/providers/structs"
 	"github.com/knadh/koanf/v2"
+
+	"github.com/1995parham-me/farvardin/internal/domain/contact"
 )
 
 // Config is the whole configuration.
@@ -131,6 +133,10 @@ type Contacts struct {
 	PhotoStabilize  bool  `json:"photo_stabilize"   koanf:"photo_stabilize"`
 	ThumbnailSize   int   `json:"thumbnail_size"    koanf:"thumbnail_size"`
 	PhotoQuality    int   `json:"photo_quality"     koanf:"photo_quality"`
+	// PhoneRegion is the country (ISO 3166-1, "IR") of phone numbers
+	// written without a country code. Lint suggests their E.164 form and
+	// the UI and MCP can fix them; "" checks only international numbers.
+	PhoneRegion string `json:"phone_region" koanf:"phone_region"`
 }
 
 // Calendars holds the calendar behaviour.
@@ -155,7 +161,7 @@ func Default() Config {
 		Auth:   Auth{Mode: "none", Realm: "farvardin", Header: "X-Remote-User", Users: nil},
 		Contacts: Contacts{
 			MaxResourceSize: 10 << 20, PhotoMaxSize: 720, PhotoGuard: true, PhotoStabilize: true,
-			ThumbnailSize: 128, PhotoQuality: 85,
+			ThumbnailSize: 128, PhotoQuality: 85, PhoneRegion: "",
 		},
 		Calendars: Calendars{Birthdays: true, BirthdayAlarmDays: 0, BirthdayColor: "#FF2D55", UserAddress: ""},
 		Push:      Push{Enabled: false, StateDir: "/var/lib/farvardin/state", Subject: "mailto:farvardin@localhost"},
@@ -236,6 +242,10 @@ func (c Config) Validate() error {
 		}
 	default:
 		return fmt.Errorf("%w: ui.auth must be proxy or jwt, not %q", ErrInvalid, c.UI.Auth)
+	}
+
+	if c.Contacts.PhoneRegion != "" && !contact.ValidRegion(c.Contacts.PhoneRegion) {
+		return fmt.Errorf("%w: contacts.phone_region %q is not a known country code (ISO 3166-1, like \"IR\")", ErrInvalid, c.Contacts.PhoneRegion)
 	}
 
 	if c.Store.Root == "" {
