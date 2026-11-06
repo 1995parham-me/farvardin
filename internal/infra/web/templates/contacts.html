@@ -1,0 +1,20 @@
+{{template "head" .}}
+<div class="bar">
+  <h1 dir="auto">{{.Title}} <span class="muted">{{len .People}}{{if .Query}} of {{.Total}}{{end}}</span></h1>
+  <form method="get" class="search">
+    <input type="search" name="q" value="{{.Query}}" placeholder="Search name, company, email, phone" autofocus>
+  </form>
+  <a class="button" href="{{.Export}}" download>Export .vcf</a>
+</div>
+<ul class="people">
+  {{range .People}}
+  <li><a href="{{.File}}">
+    {{template "avatar" .}}
+    <span class="who"><span class="name" dir="auto">{{.Name}}</span><span class="muted" dir="auto">{{if .Org}}{{.Org}}{{else if .Email}}{{.Email}}{{else}}{{.Phone}}{{end}}</span></span>
+    {{if .Issues}}<span class="badge bad">{{.Issues}} error{{if gt .Issues 1}}s{{end}}</span>{{end}}
+  </a></li>
+  {{else}}
+  <li class="muted">Nothing matches.</li>
+  {{end}}
+</ul>
+{{template "foot" .}}

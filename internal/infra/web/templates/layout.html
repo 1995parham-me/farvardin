@@ -1,0 +1,30 @@
+{{define "head"}}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>{{.Title}} · Farvardin</title>
+<link rel="stylesheet" href="{{ui "/static/style.css"}}">
+<link rel="icon" href="{{ui "/static/icon.svg"}}" type="image/svg+xml">
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="{{ui "/"}}"><img src="{{ui "/static/icon.svg"}}" alt="" width="22" height="22">Farvardin</a>
+  <nav>
+    {{range .Books}}<a href="{{ui "/contacts/"}}{{.Name}}/">Contacts{{if gt (len $.Books) 1}} · {{.Name}}{{end}}</a>{{end}}
+    {{range .Calendars}}<a href="{{ui "/calendars/"}}{{.}}/">{{.}}</a>{{end}}
+    <a href="{{ui "/lint"}}">Lint</a>
+  </nav>
+</header>
+<main>
+{{end}}
+
+{{define "foot"}}
+</main>
+<footer>farvardin · CardDAV/CalDAV over git</footer>
+</body>
+</html>
+{{end}}
+
+{{define "avatar"}}{{if .HasPhoto}}<img class="avatar" loading="lazy" src="{{ui "/photo/"}}{{.Book}}/{{.File}}?s=96" alt="">{{else}}<span class="avatar h{{hue .Name}}" aria-hidden="true">{{initials .Name}}</span>{{end}}{{end}}

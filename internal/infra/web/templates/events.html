@@ -1,0 +1,14 @@
+{{template "head" .}}
+<div class="bar">
+  <h1 dir="auto">{{.Title}} <span class="muted">next 90 days</span></h1>
+  <a class="button" href="{{.Feed}}">Subscribe (.ics)</a>
+</div>
+<ul class="list">
+  {{range .Rows}}
+  <li><div><span dir="auto">{{.Title}}{{if .Repeats}} <span class="badge">repeats</span>{{end}}{{if eq .Kind "VTODO"}} <span class="badge">task</span>{{end}}</span>
+  <span class="muted">{{if .AllDay}}{{date .When}}{{else}}{{datetime .When}}{{end}}{{if .Location}} · {{.Location}}{{end}}</span></div></li>
+  {{else}}
+  <li class="muted">Nothing in the next 90 days.</li>
+  {{end}}
+</ul>
+{{template "foot" .}}

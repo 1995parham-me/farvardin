@@ -1,0 +1,32 @@
+[Unit]
+Description=farvardin CardDAV/CalDAV server
+Documentation=https://github.com/1995parham-me/farvardin
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=farvardin
+Group=farvardin
+ExecStart=/usr/bin/farvardin serve --config /etc/farvardin/config.toml
+Restart=on-failure
+RestartSec=5
+
+# farvardin only needs its store.
+StateDirectory=farvardin
+ReadWritePaths=/var/lib/farvardin
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

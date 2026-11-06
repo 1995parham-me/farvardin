@@ -1,0 +1,58 @@
+# farvardin configuration. Every key can also be set from the environment:
+# FARVARDIN_<SECTION>__<KEY>, for example FARVARDIN_SERVER__LISTEN=:8000.
+
+[server]
+listen = "127.0.0.1:8000"
+# Mount the DAV tree below a path when a reverse proxy serves it there.
+prefix = ""
+# Read-only browser UI at /ui/.
+ui = true
+# Prometheus metrics at /metrics (not behind auth; keep the listener private).
+metrics = true
+
+[store]
+# Same layout as Xandikos: <root>/<principal>/{contacts,calendars}/<name>/
+# Each collection is a git repository. Point this at an existing Xandikos
+# store to serve it as it is.
+root = "/var/lib/farvardin"
+principal = "user"
+author_name = "farvardin"
+author_email = "farvardin@localhost"
+# Create the principal, an address book and a calendar if they are missing.
+init = true
+
+[auth]
+# "none": a reverse proxy in front authenticates (for example nginx basic auth).
+# "basic": the users below, with bcrypt hashes from `farvardin hash-password`.
+# "header": trust the user name a proxy sets in `header`.
+mode = "none"
+realm = "farvardin"
+header = "X-Remote-User"
+
+# [auth.users]
+# parham = "$2a$10$..."
+
+[contacts]
+max_resource_size = 10485760
+# Scale photos whose longer side is larger than this; 0 turns it off.
+photo_max_size = 720
+# Keep the stored photo when a client sends a thumbnail of it.
+photo_guard = true
+# Keep the stored photo bytes when a client re-encodes the same picture.
+photo_stabilize = true
+# The longest side that counts as a thumbnail for photo_guard.
+thumbnail_size = 128
+photo_quality = 85
+
+[calendars]
+# A read-only calendar of birthdays and anniversaries from the address book.
+birthdays = true
+# Remind this many days before; 0 for no reminder.
+birthday_alarm_days = 0
+birthday_color = "#FF2D55"
+# Published as calendar-user-address-set, e.g. "mailto:me@example.com".
+user_address = ""
+
+[log]
+level = "info"   # debug, info, warn, error
+format = "text"  # text or json

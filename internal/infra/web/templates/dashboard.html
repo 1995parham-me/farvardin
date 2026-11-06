@@ -1,0 +1,33 @@
+{{template "head" .}}
+<section class="cards">
+  {{range .Collections}}
+  <a class="stat" href="{{.Link}}">
+    <span class="label">{{.Kind}}</span>
+    <span class="value">{{.Objects}}</span>
+    <span class="sub" dir="auto">{{if .Display}}{{.Display}}{{else}}{{.Name}}{{end}}</span>
+  </a>
+  {{end}}
+</section>
+
+<div class="grid2">
+<section>
+  <h2>Next 30 days</h2>
+  {{if .Soon}}
+  <ul class="list">
+    {{range .Soon}}
+    <li><a href="{{.Link}}"><span dir="auto">{{.Title}}</span><span class="muted">{{if eq .Days 0}}today{{else if eq .Days 1}}tomorrow{{else}}in {{.Days}} days · {{date .When}}{{end}}</span></a></li>
+    {{end}}
+  </ul>
+  {{else}}<p class="muted">No birthdays or anniversaries in the next 30 days.</p>{{end}}
+</section>
+
+<section>
+  <h2>Recent changes</h2>
+  <ul class="list">
+    {{range .Recent}}
+    <li><div><span>{{.Rev.Message}}</span><span class="muted">{{.Collection}} · {{datetime .Rev.When}}{{if .Rev.Requester}} · {{.Rev.Requester}}{{end}}</span></div></li>
+    {{end}}
+  </ul>
+</section>
+</div>
+{{template "foot" .}}

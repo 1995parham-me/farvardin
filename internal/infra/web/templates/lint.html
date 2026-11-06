@@ -1,0 +1,12 @@
+{{template "head" .}}
+<h1>Lint <span class="muted">{{len .Findings}} cards with findings</span></h1>
+<p class="muted">Errors block a client from saving the card again; warnings are advice.</p>
+<ul class="list">
+  {{range .Findings}}
+  <li><a href="{{ui "/contacts/"}}{{.Book}}/{{.File}}"><div><span dir="auto">{{.Name}}</span>
+  <span>{{range .Issues}}<span class="badge {{if eq .Severity "error"}}bad{{end}}">{{.Message}}</span> {{end}}</span></div></a></li>
+  {{else}}
+  <li class="muted">Every card is clean.</li>
+  {{end}}
+</ul>
+{{template "foot" .}}

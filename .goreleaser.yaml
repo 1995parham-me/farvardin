@@ -1,0 +1,123 @@
+version: 2
+
+project_name: farvardin
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: farvardin
+    main: ./cmd/farvardin
+    binary: farvardin
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+
+archives:
+  - id: default
+    formats:
+      - tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - README.md
+      - LICENSE
+      - configs/config.example.toml
+      - deployments/systemd/farvardin.service
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "^ci:"
+
+nfpms:
+  - id: packages
+    package_name: farvardin
+    vendor: 1995parham-me
+    homepage: https://github.com/1995parham-me/farvardin
+    maintainer: Parham Alvani <parham.alvani@gmail.com>
+    description: |-
+      CardDAV and CalDAV server that keeps contacts and calendars in git,
+      compatible with the Xandikos store layout, with a read-only web UI.
+    section: net
+    license: Apache-2.0
+    formats:
+      - deb
+      - rpm
+    bindir: /usr/bin
+    contents:
+      - src: configs/config.example.toml
+        dst: /etc/farvardin/config.example.toml
+        type: config
+      - src: deployments/systemd/farvardin.service
+        dst: /usr/lib/systemd/system/farvardin.service
+
+dockers:
+  - id: farvardin-amd64
+    image_templates:
+      - "ghcr.io/1995parham-me/farvardin:{{ .Version }}-amd64"
+      - "ghcr.io/1995parham-me/farvardin:latest-amd64"
+    use: buildx
+    goos: linux
+    goarch: amd64
+    dockerfile: build/package/Dockerfile
+    build_flag_templates:
+      - "--platform=linux/amd64"
+      - "--label=org.opencontainers.image.source=https://github.com/1995parham-me/farvardin"
+      - "--label=org.opencontainers.image.title={{.ProjectName}}"
+      - "--label=org.opencontainers.image.description=CardDAV and CalDAV server backed by git"
+      - "--label=org.opencontainers.image.version={{.Version}}"
+      - "--label=org.opencontainers.image.revision={{.FullCommit}}"
+      - "--label=org.opencontainers.image.licenses=Apache-2.0"
+    extra_files:
+      - configs/config.example.toml
+  - id: farvardin-arm64
+    image_templates:
+      - "ghcr.io/1995parham-me/farvardin:{{ .Version }}-arm64"
+      - "ghcr.io/1995parham-me/farvardin:latest-arm64"
+    use: buildx
+    goos: linux
+    goarch: arm64
+    dockerfile: build/package/Dockerfile
+    build_flag_templates:
+      - "--platform=linux/arm64"
+      - "--label=org.opencontainers.image.source=https://github.com/1995parham-me/farvardin"
+      - "--label=org.opencontainers.image.title={{.ProjectName}}"
+      - "--label=org.opencontainers.image.description=CardDAV and CalDAV server backed by git"
+      - "--label=org.opencontainers.image.version={{.Version}}"
+      - "--label=org.opencontainers.image.revision={{.FullCommit}}"
+      - "--label=org.opencontainers.image.licenses=Apache-2.0"
+    extra_files:
+      - configs/config.example.toml
+
+docker_manifests:
+  - name_template: "ghcr.io/1995parham-me/farvardin:{{ .Version }}"
+    image_templates:
+      - "ghcr.io/1995parham-me/farvardin:{{ .Version }}-amd64"
+      - "ghcr.io/1995parham-me/farvardin:{{ .Version }}-arm64"
+  - name_template: "ghcr.io/1995parham-me/farvardin:latest"
+    image_templates:
+      - "ghcr.io/1995parham-me/farvardin:latest-amd64"
+      - "ghcr.io/1995parham-me/farvardin:latest-arm64"
+
+release:
+  github:
+    owner: 1995parham-me
+    name: farvardin
+  draft: false
+  prerelease: auto
+  name_template: "v{{.Version}}"

@@ -1,0 +1,9 @@
+/farvardin
+/dist/
+*.test
+*.out
+coverage.*
+.DS_Store
+/.idea
+/.vscode
+/data/

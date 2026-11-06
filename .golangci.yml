@@ -1,0 +1,91 @@
+---
+version: "2"
+
+linters:
+  default: all
+  disable:
+    # Keep this list short; each entry says why.
+    - depguard       # no curated import allowlist for this project
+    - gomodguard     # same reason as depguard
+    - exhaustruct    # deprecated in v2.13.0; exhaustruct_v5 replaces it and both double-report
+    - exhaustruct_v5 # protocol structs are built field by field; zero values are the defaults
+    - varnamelen     # short names (r, w, c, l) are idiomatic in handlers and parsers
+    - wsl            # whitespace style churn
+    - wsl_v5         # same as wsl
+    - nlreturn       # same as wsl
+    - tagliatelle    # config keys follow TOML snake_case, JSContact follows RFC 9553 names
+    - mnd            # RFC numbers (75-octet folding, 16x16 fingerprints) read better inline
+    - ireturn        # the DAV layer returns small interfaces on purpose
+    - gochecknoglobals # namespace tables and sentinel errors are package-level by design
+    - lll            # long RFC references in comments
+    - godox          # TODO notes point at the roadmap
+    - err113         # dynamic errors are wrapped with %w at the boundary
+    - noinlineerr    # inline `if err :=` is the idiom
+    - funcorder      # files group helpers next to their callers
+    - goconst        # vCard/iCalendar property names are spec tokens; constants would hide them
+    - recvcheck      # value receivers read, pointer receivers edit (Card, Line, Meta) by design
+  settings:
+    cyclop:
+      # Protocol code dispatches over flat lists of RFC methods and properties.
+      max-complexity: 25
+    gocognit:
+      min-complexity: 50
+    funlen:
+      lines: 110
+      statements: 70
+    nestif:
+      min-complexity: 14
+    errcheck:
+      exclude-functions:
+        # bufio.Writer errors are sticky and checked once at Flush.
+        - (*bufio.Writer).WriteString
+        - (*bufio.Writer).WriteByte
+        - (*bufio.Writer).Write
+        - fmt.Fprintf
+        - fmt.Fprint
+        - fmt.Fprintln
+    revive:
+      rules:
+        - name: exported
+          arguments: ["checkPrivateReceivers", "disableStutteringCheck"]
+        - name: package-comments
+    wrapcheck:
+      # Our own packages wrap their errors with context already.
+      ignore-package-globs:
+        - github.com/1995parham-me/farvardin/*
+      ignore-interface-regexps:
+        - ^collection$
+        - ^writable$
+      ignore-sigs:
+        - .Errorf(
+        - errors.New(
+        - errors.Join(
+    gosec:
+      excludes:
+        - G104 # unhandled errors on best-effort writes to the HTTP response
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters:
+          - gosec
+          - funlen
+          - maintidx
+          - goconst
+          - paralleltest
+          - testpackage
+          - dupword
+          - gocognit
+          - cyclop
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/1995parham-me/farvardin
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

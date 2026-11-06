@@ -1,0 +1,40 @@
+{{template "head" .}}
+<article class="contact">
+  <div class="hero">
+    {{if .HasPhoto}}<a href="{{ui "/photo/"}}{{.Book}}/{{.File}}"><img class="photo" src="{{ui "/photo/"}}{{.Book}}/{{.File}}?s=320" alt=""></a>{{else}}<span class="photo avatar h{{hue .Title}}">{{initials .Title}}</span>{{end}}
+    <div>
+      <h1 dir="auto">{{.Title}}</h1>
+      <p class="muted">vCard {{.Version}} · {{.File}} · {{kib .Object.Size}}{{if .PhotoInfo}} · photo {{.PhotoInfo}}{{end}}</p>
+      <p class="actions">
+        <a class="button" href="{{.Raw}}" download>vCard</a>
+        <a class="button" href="{{.Raw}}?format=3.0" download>3.0</a>
+        <a class="button" href="{{.Raw}}?format=4.0" download>4.0</a>
+        <a class="button" href="{{.Raw}}?format=jscontact">JSContact</a>
+      </p>
+    </div>
+  </div>
+
+  {{if .Issues}}
+  <ul class="issues">{{range .Issues}}<li class="{{.Severity}}">{{.Severity}}: {{.Message}}</li>{{end}}</ul>
+  {{end}}
+
+  <dl class="fields">
+    {{range .Fields}}
+    <dt>{{.Label}}</dt>
+    <dd dir="auto">{{if .Link}}<a href="{{.Link}}">{{.Value}}</a>{{else}}{{.Value}}{{end}}</dd>
+    {{end}}
+  </dl>
+
+  <h2>History</h2>
+  <ul class="list">
+    {{range .History}}
+    <li><div><span>{{.Message}} <code>{{short .Commit}}</code></span><span class="muted">{{datetime .When}}{{if .Requester}} · {{.Requester}}{{end}}</span></div></li>
+    {{end}}
+  </ul>
+
+  <details>
+    <summary>JSContact (RFC 9553)</summary>
+    <pre>{{.JSContact}}</pre>
+  </details>
+</article>
+{{template "foot" .}}
