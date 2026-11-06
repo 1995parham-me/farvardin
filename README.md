@@ -9,7 +9,8 @@ The name: Xandikos is named after a spring month of the ancient Macedonian calen
 **Protocols**
 
 - WebDAV (RFC 4918), CardDAV (RFC 6352) and CalDAV (RFC 4791), with discovery through `/.well-known/carddav` and `/.well-known/caldav`.
-- WebDAV sync (RFC 6578) `sync-collection` with real deltas, including deletions. The sync token is the git commit and the ETag is the git blob id. Both are identical to Xandikos, so clients moving between the two servers keep their ETags.
+- WebDAV sync (RFC 6578) `sync-collection` with real deltas, including deletions. The sync token (and ctag) is the collection's git tree id and the ETag is the git blob id. Both are exactly what Xandikos sends for the same store, so a client moved between the two servers keeps its sync state and downloads nothing.
+- **WebDAV-Push** ([draft-bitfire-webdav-push](https://github.com/bitfireAT/webdav-push)): DAVx5 subscribes and gets a Web Push message the moment a collection changes, instead of polling. Messages are encrypted with RFC 8291 and signed with VAPID (RFC 8292); `Push-Dont-Notify` is honoured. Subscriptions use the same files as Xandikos, so existing subscriptions carry over.
 - `addressbook-multiget`, `addressbook-query` (text-match with the four match types and both case-insensitive collations), `calendar-multiget` and `calendar-query` (component filters and time ranges, including recurring events).
 - `getctag`, `calendar-color`, `calendar-order`, `supported-calendar-component-set`, PROPPATCH (atomic), MKCOL and MKCALENDAR.
 - `no-uid-conflict` and `valid-address-data` / `valid-calendar-data` preconditions, so a broken object is refused instead of stored.
@@ -56,7 +57,7 @@ For a real deployment, copy [`configs/config.example.toml`](configs/config.examp
 2. Set `store.root` to the Xandikos root (the directory that holds `user/`) and keep `store.principal = "user"`. farvardin reads the `.xandikos` metadata files and the git history as they are.
 3. Start farvardin on the same address.
 
-Clients keep their ETags because both servers use the git blob id. Sync tokens differ in format, so each client does one full sync (a listing of ETags, not a download of every card) and then continues incrementally. Moving back works the same way.
+Clients keep their ETags (git blob ids) and their sync tokens (git tree ids), so nothing is downloaded again. For WebDAV-Push, set `[push] state_dir` to Xandikos's `--state-dir`: the VAPID key, each collection's topic and the phones' subscriptions are read from the same files, so push keeps working without the phones registering again. Moving back works the same way.
 
 ## Command line
 

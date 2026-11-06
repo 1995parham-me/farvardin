@@ -30,11 +30,15 @@ type Object struct {
 
 // Snapshot is the state of a collection at one commit.
 type Snapshot struct {
-	// Token is the commit id; "" for an empty repository.
+	// Token is the id of the commit's tree: it changes exactly when the
+	// content does, and it is the sync token and ctag Xandikos uses for
+	// the same store, so clients can move between the two servers without
+	// a resync. "" for an empty repository.
 	Token   string
 	Objects []Object
 	byName  map[string]int
 	meta    Meta
+	commit  string
 }
 
 // Lookup returns the object with that name.
@@ -80,6 +84,9 @@ func openCollection(dir, name string, kind Kind, author Author) (*Collection, er
 	return &Collection{dir: dir, name: name, kind: kind, author: author, repo: repo, mu: sync.Mutex{}, last: nil}, nil
 }
 
+// Dir returns the collection's directory.
+func (c *Collection) Dir() string { return c.dir }
+
 // Name returns the collection's directory name.
 func (c *Collection) Name() string { return c.name }
 
@@ -101,35 +108,52 @@ func (c *Collection) snapshotLocked() (*Snapshot, error) {
 	}
 
 	if head == nil {
-		return &Snapshot{Token: "", Objects: nil, byName: map[string]int{}, meta: Meta{}}, nil
+		return &Snapshot{Token: "", Objects: nil, byName: map[string]int{}, meta: Meta{}, commit: ""}, nil
 	}
 
-	if c.last != nil && c.last.Token == head.Hash().String() {
+	if c.last != nil && c.last.commit == head.Hash().String() {
 		return c.last, nil
 	}
 
-	snap, err := c.snapshotAt(head.Hash())
+	commit, err := c.repo.CommitObject(head.Hash())
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("reading HEAD commit of %s: %w", c.dir, err)
 	}
 
+	tree, err := commit.Tree()
+	if err != nil {
+		return nil, fmt.Errorf("reading tree of %s: %w", head.Hash(), err)
+	}
+
+	snap := c.snapshotOf(tree)
+	snap.commit = head.Hash().String()
 	c.last = snap
 
 	return snap, nil
 }
 
-func (c *Collection) snapshotAt(commitHash plumbing.Hash) (*Snapshot, error) {
-	commit, err := c.repo.CommitObject(commitHash)
+// snapshotAt reads the snapshot for a token: a tree id (what this server
+// and Xandikos hand out) or a commit id.
+func (c *Collection) snapshotAt(h plumbing.Hash) (*Snapshot, error) {
+	if tree, err := c.repo.TreeObject(h); err == nil {
+		return c.snapshotOf(tree), nil
+	}
+
+	commit, err := c.repo.CommitObject(h)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrInvalidToken, err)
+		return nil, ErrInvalidToken
 	}
 
 	tree, err := commit.Tree()
 	if err != nil {
-		return nil, fmt.Errorf("reading tree of %s: %w", commitHash, err)
+		return nil, ErrInvalidToken
 	}
 
-	snap := &Snapshot{Token: commitHash.String(), Objects: nil, byName: map[string]int{}, meta: Meta{}}
+	return c.snapshotOf(tree), nil
+}
+
+func (c *Collection) snapshotOf(tree *object.Tree) *Snapshot {
+	snap := &Snapshot{Token: tree.Hash.String(), Objects: nil, byName: map[string]int{}, meta: Meta{}, commit: ""}
 
 	for _, e := range tree.Entries {
 		if e.Name == MetaFile {
@@ -149,7 +173,7 @@ func (c *Collection) snapshotAt(commitHash plumbing.Hash) (*Snapshot, error) {
 		snap.Objects = append(snap.Objects, Object{Name: e.Name, ETag: e.Hash.String(), Size: size})
 	}
 
-	return snap, nil
+	return snap
 }
 
 func (c *Collection) head() (*plumbing.Reference, error) {
@@ -664,7 +688,7 @@ func (c *Collection) SnapshotAt(token string) (*Snapshot, error) {
 // NewSnapshot builds a snapshot for a collection that is not stored in
 // git, such as the generated birthdays calendar.
 func NewSnapshot(token string, objects []Object, meta Meta) *Snapshot {
-	s := &Snapshot{Token: token, Objects: objects, byName: make(map[string]int, len(objects)), meta: meta}
+	s := &Snapshot{Token: token, Objects: objects, byName: make(map[string]int, len(objects)), meta: meta, commit: ""}
 
 	for i, o := range objects {
 		s.byName[o.Name] = i

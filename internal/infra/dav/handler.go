@@ -18,6 +18,7 @@ import (
 	"github.com/1995parham-me/farvardin/internal/domain/calendar"
 	"github.com/1995parham-me/farvardin/internal/domain/contact"
 	"github.com/1995parham-me/farvardin/internal/infra/metrics"
+	"github.com/1995parham-me/farvardin/internal/infra/push"
 	"github.com/1995parham-me/farvardin/internal/infra/store"
 )
 
@@ -42,6 +43,8 @@ type Options struct {
 	// CalendarUserAddress is published as the principal's
 	// calendar-user-address-set, for example "mailto:me@example.com".
 	CalendarUserAddress string
+	// Push enables WebDAV-Push; nil turns it off.
+	Push *push.Service
 }
 
 // Handler is the DAV http.Handler.
@@ -285,7 +288,18 @@ func (h *Handler) collections(kind store.Kind) []collection {
 
 // ServeHTTP dispatches DAV methods.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("DAV", "1, 3, access-control, addressbook, calendar-access, extended-mkcol")
+	features := "1, 3, access-control, addressbook, calendar-access, extended-mkcol, sync-collection"
+	if h.opts.Push != nil {
+		features += ", webdav-push"
+	}
+
+	w.Header().Set("DAV", features)
+
+	if h.opts.Push != nil && strings.HasPrefix(r.URL.Path, h.opts.Prefix+"/"+push.Route+"/") {
+		h.serveSubscription(w, r)
+
+		return
+	}
 
 	if strings.HasPrefix(r.URL.Path, "/.well-known/carddav") || strings.HasPrefix(r.URL.Path, "/.well-known/caldav") {
 		http.Redirect(w, r, h.principalHref(), http.StatusMovedPermanently)
@@ -295,8 +309,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	switch r.Method {
 	case http.MethodOptions:
-		w.Header().Set("Allow", "OPTIONS, GET, HEAD, PUT, DELETE, PROPFIND, PROPPATCH, REPORT, MKCOL, MKCALENDAR")
+		w.Header().Set("Allow", "OPTIONS, GET, HEAD, POST, PUT, DELETE, PROPFIND, PROPPATCH, REPORT, MKCOL, MKCALENDAR")
 		w.WriteHeader(http.StatusOK)
+	case http.MethodPost:
+		h.servePost(w, r)
 	case http.MethodGet, http.MethodHead:
 		h.serveGet(w, r)
 	case http.MethodPut:
@@ -312,7 +328,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "MKCOL", "MKCALENDAR":
 		h.serveMkcol(w, r)
 	default:
-		w.Header().Set("Allow", "OPTIONS, GET, HEAD, PUT, DELETE, PROPFIND, PROPPATCH, REPORT, MKCOL, MKCALENDAR")
+		w.Header().Set("Allow", "OPTIONS, GET, HEAD, POST, PUT, DELETE, PROPFIND, PROPPATCH, REPORT, MKCOL, MKCALENDAR")
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
 }
@@ -577,6 +593,7 @@ func (h *Handler) servePut(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.metrics.Write(string(res.home), op)
+	h.notifyContent(r, res.col)
 
 	// RFC 4791 / 6352: send the ETag only when the stored bytes are
 	// exactly what the client sent; otherwise it must fetch them again.
@@ -722,6 +739,7 @@ func (h *Handler) serveDelete(w http.ResponseWriter, r *http.Request) {
 		}
 
 		h.metrics.Write(string(res.home), "deleted")
+		h.notifyContent(r, res.col)
 		w.WriteHeader(http.StatusNoContent)
 	}
 }

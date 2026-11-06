@@ -8,18 +8,23 @@ import (
 	"strings"
 
 	"github.com/1995parham-me/farvardin/internal/domain/vcf"
+	"github.com/1995parham-me/farvardin/internal/infra/push"
 	"github.com/1995parham-me/farvardin/internal/infra/store"
 )
 
-const syncTokenPrefix = "https://github.com/1995parham-me/farvardin/ns/sync/" //nolint:gosec // a URI prefix, not a credential
+// syncToken is the bare tree id, exactly as Xandikos sends it, so a client
+// keeps its token when the server changes between the two.
+func syncToken(snap *store.Snapshot) string { return snap.Token }
 
-func syncToken(snap *store.Snapshot) string { return syncTokenPrefix + snap.Token }
-
-// parseSyncToken accepts our URI form and a bare commit id.
+// parseSyncToken accepts a bare id and the URI forms other servers use
+// (anything ending in "/<id>").
 func parseSyncToken(s string) string {
 	s = strings.TrimSpace(s)
+	if i := strings.LastIndexByte(s, '/'); i >= 0 {
+		s = s[i+1:]
+	}
 
-	return strings.TrimPrefix(s, syncTokenPrefix)
+	return s
 }
 
 func vline(name, value string) vcf.Line {
@@ -346,6 +351,8 @@ func (h *Handler) prop(res *resource, n xml.Name, dataReq *node) *elem {
 		if res.kind == resObject {
 			return h.objectData(res, n, dataReq)
 		}
+	case name(push.Namespace, "transports"), name(push.Namespace, "topic"), name(push.Namespace, "supported-triggers"):
+		return h.pushProp(res, n)
 	}
 
 	return nil
@@ -474,6 +481,13 @@ func (h *Handler) serveProppatch(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, err)
 
 		return
+	} else {
+		names := make([]string, 0, len(applied))
+		for _, n := range applied {
+			names = append(names, "{"+n.Space+"}"+n.Local)
+		}
+
+		h.notifyProperties(r, res.col, names)
 	}
 
 	for _, n := range applied {

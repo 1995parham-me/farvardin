@@ -23,7 +23,18 @@ type Config struct {
 	Auth      Auth      `json:"auth"      koanf:"auth"`
 	Contacts  Contacts  `json:"contacts"  koanf:"contacts"`
 	Calendars Calendars `json:"calendars" koanf:"calendars"`
+	Push      Push      `json:"push"      koanf:"push"`
 	Log       Log       `json:"log"       koanf:"log"`
+}
+
+// Push configures WebDAV-Push.
+type Push struct {
+	Enabled bool `json:"enabled" koanf:"enabled"`
+	// StateDir holds vapid/private.pem and the subscription index; with a
+	// Xandikos store it is Xandikos's --state-dir, so subscriptions carry over.
+	StateDir string `json:"state_dir" koanf:"state_dir"`
+	// Subject is the VAPID contact, a mailto: or https: URI.
+	Subject string `json:"subject" koanf:"subject"`
 }
 
 // Server is the HTTP listener.
@@ -34,6 +45,9 @@ type Server struct {
 	Prefix  string `json:"prefix"  koanf:"prefix"`
 	UI      bool   `json:"ui"      koanf:"ui"`
 	Metrics bool   `json:"metrics" koanf:"metrics"`
+	// MetricsListen serves /metrics on its own address (for example
+	// 127.0.0.1:8001); empty serves it on Listen.
+	MetricsListen string `json:"metrics_listen" koanf:"metrics_listen"`
 }
 
 // Store is the git store.
@@ -84,7 +98,7 @@ type Log struct {
 // Default returns the built-in defaults.
 func Default() Config {
 	return Config{
-		Server: Server{Listen: "127.0.0.1:8000", Prefix: "", UI: true, Metrics: true},
+		Server: Server{Listen: "127.0.0.1:8000", Prefix: "", UI: true, Metrics: true, MetricsListen: ""},
 		Store:  Store{Root: "/var/lib/farvardin", Principal: "user", AuthorName: "farvardin", AuthorEmail: "farvardin@localhost", Init: true},
 		Auth:   Auth{Mode: "none", Realm: "farvardin", Header: "X-Remote-User", Users: nil},
 		Contacts: Contacts{
@@ -92,6 +106,7 @@ func Default() Config {
 			ThumbnailSize: 128, PhotoQuality: 85,
 		},
 		Calendars: Calendars{Birthdays: true, BirthdayAlarmDays: 0, BirthdayColor: "#FF2D55", UserAddress: ""},
+		Push:      Push{Enabled: false, StateDir: "/var/lib/farvardin/state", Subject: "mailto:farvardin@localhost"},
 		Log:       Log{Level: "info", Format: "text"},
 	}
 }

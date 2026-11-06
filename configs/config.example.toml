@@ -9,6 +9,8 @@ prefix = ""
 ui = true
 # Prometheus metrics at /metrics (not behind auth; keep the listener private).
 metrics = true
+# Serve /metrics on its own address instead, e.g. "127.0.0.1:8001".
+metrics_listen = ""
 
 [store]
 # Same layout as Xandikos: <root>/<principal>/{contacts,calendars}/<name>/
@@ -52,6 +54,15 @@ birthday_alarm_days = 0
 birthday_color = "#FF2D55"
 # Published as calendar-user-address-set, e.g. "mailto:me@example.com".
 user_address = ""
+
+[push]
+# WebDAV-Push (draft-bitfire-webdav-push): DAVx5 gets changes at once
+# instead of polling. The VAPID key is <state_dir>/vapid/private.pem and is
+# created on first start. With a Xandikos store, point state_dir at
+# Xandikos's --state-dir: the phones' subscriptions and key carry over.
+enabled = false
+state_dir = "/var/lib/farvardin/state"
+subject = "mailto:farvardin@localhost"
 
 [log]
 level = "info"   # debug, info, warn, error

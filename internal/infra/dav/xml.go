@@ -20,10 +20,11 @@ const (
 	NSCS    = "http://calendarserver.org/ns/"
 	NSApple = "http://apple.com/ns/ical/"
 	NSFV    = "https://github.com/1995parham-me/farvardin/ns"
+	NSPush  = "https://bitfire.at/webdav-push"
 )
 
 var prefixes = map[string]string{
-	NSDAV: "d", NSCard: "card", NSCal: "cal", NSCS: "cs", NSApple: "ical", NSFV: "fv",
+	NSDAV: "d", NSCard: "card", NSCal: "cal", NSCS: "cs", NSApple: "ical", NSFV: "fv", NSPush: "p",
 }
 
 // errBadXML is returned for a request body that is not well-formed.

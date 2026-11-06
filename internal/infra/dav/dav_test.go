@@ -165,7 +165,7 @@ func TestCardLifecycleAndSync(t *testing.T) {
 	expect(t, "sync after delete", st, http.StatusMultiStatus, body)
 	mustContain(t, "sync after delete", body, "bob.vcf", "404 Not Found")
 
-	st, _, body = c.do("REPORT", book, strings.Replace(syncBody, start, "https://github.com/1995parham-me/farvardin/ns/sync/0123456789abcdef0123456789abcdef01234567", 1))
+	st, _, body = c.do("REPORT", book, strings.Replace(syncBody, start, "0123456789abcdef0123456789abcdef01234567", 1))
 	expect(t, "bad token", st, http.StatusForbidden, body)
 	mustContain(t, "bad token", body, "valid-sync-token")
 

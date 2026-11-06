@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -19,6 +20,7 @@ import (
 	"github.com/1995parham-me/farvardin/internal/infra/config"
 	"github.com/1995parham-me/farvardin/internal/infra/dav"
 	"github.com/1995parham-me/farvardin/internal/infra/metrics"
+	"github.com/1995parham-me/farvardin/internal/infra/push"
 	"github.com/1995parham-me/farvardin/internal/infra/store"
 	"github.com/1995parham-me/farvardin/internal/infra/web"
 )
@@ -89,20 +91,12 @@ func serve(ctx context.Context, cmd *cli.Command) error {
 		davUI = uiPath + "/"
 	}
 
-	davHandler := dav.New(s, dav.Options{
-		Prefix:          cfg.Server.Prefix,
-		UIPath:          davUI,
-		MaxResourceSize: cfg.Contacts.MaxResourceSize,
-		Photo: contact.PhotoPolicy{
-			MaxSize: cfg.Contacts.PhotoMaxSize, Guard: cfg.Contacts.PhotoGuard, Stabilize: cfg.Contacts.PhotoStabilize,
-			ThumbnailSize: cfg.Contacts.ThumbnailSize, Quality: cfg.Contacts.PhotoQuality,
-		},
-		Birthdays:             cfg.Calendars.Birthdays,
-		BirthdayAlarmDays:     cfg.Calendars.BirthdayAlarmDays,
-		BirthdayColor:         cfg.Calendars.BirthdayColor,
-		AllowCollectionDelete: false,
-		CalendarUserAddress:   cfg.Calendars.UserAddress,
-	}, log, m)
+	pushSvc, err := newPush(cfg.Push, log)
+	if err != nil {
+		return err
+	}
+
+	davHandler := dav.New(s, davOptions(cfg, davUI, pushSvc), log, m)
 
 	mux := http.NewServeMux()
 	guard := auth.New(cfg.Auth.Mode, cfg.Auth.Realm, cfg.Auth.Header, cfg.Auth.Users)
@@ -116,8 +110,12 @@ func serve(ctx context.Context, cmd *cli.Command) error {
 		mux.Handle(uiPath+"/", guard.Wrap(ui))
 	}
 
-	if m != nil {
+	if m != nil && cfg.Server.MetricsListen == "" {
 		mux.Handle("GET /metrics", m.Handler())
+	}
+
+	if m != nil && cfg.Server.MetricsListen != "" {
+		go serveMetrics(cfg.Server.MetricsListen, m, log)
 	}
 
 	mux.Handle("/", guard.Wrap(davHandler))
@@ -155,6 +153,51 @@ func serve(ctx context.Context, cmd *cli.Command) error {
 		log.Info("shutting down")
 
 		return srv.Shutdown(shutdown) //nolint:wrapcheck // shutdown errors are reported as they are
+	}
+}
+
+func davOptions(cfg config.Config, uiPath string, pushSvc *push.Service) dav.Options {
+	return dav.Options{
+		Prefix:          cfg.Server.Prefix,
+		UIPath:          uiPath,
+		MaxResourceSize: cfg.Contacts.MaxResourceSize,
+		Photo: contact.PhotoPolicy{
+			MaxSize: cfg.Contacts.PhotoMaxSize, Guard: cfg.Contacts.PhotoGuard, Stabilize: cfg.Contacts.PhotoStabilize,
+			ThumbnailSize: cfg.Contacts.ThumbnailSize, Quality: cfg.Contacts.PhotoQuality,
+		},
+		Birthdays:             cfg.Calendars.Birthdays,
+		BirthdayAlarmDays:     cfg.Calendars.BirthdayAlarmDays,
+		BirthdayColor:         cfg.Calendars.BirthdayColor,
+		AllowCollectionDelete: false,
+		CalendarUserAddress:   cfg.Calendars.UserAddress,
+		Push:                  pushSvc,
+	}
+}
+
+func newPush(cfg config.Push, log *slog.Logger) (*push.Service, error) {
+	if !cfg.Enabled {
+		return nil, nil //nolint:nilnil // nil means push is off
+	}
+
+	keys, err := push.LoadKeys(filepath.Join(cfg.StateDir, "vapid", "private.pem"), cfg.Subject)
+	if err != nil {
+		return nil, fmt.Errorf("loading the VAPID key: %w", err)
+	}
+
+	log.Info("WebDAV-Push enabled", "state", cfg.StateDir, "vapid", keys.Public)
+
+	return push.New(keys, cfg.StateDir, log), nil
+}
+
+func serveMetrics(addr string, m *metrics.Metrics, log *slog.Logger) {
+	mux := http.NewServeMux()
+	mux.Handle("GET /metrics", m.Handler())
+
+	//nolint:exhaustruct // only the timeouts that matter are set
+	srv := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+
+	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		log.Error("metrics listener stopped", "address", addr, "error", err)
 	}
 }
 
