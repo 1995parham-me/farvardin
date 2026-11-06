@@ -235,3 +235,20 @@ func TestCalendarQueryAndProppatch(t *testing.T) {
 	_, _, body = c.do("GET", cal, "")
 	mustContain(t, "webcal export", body, "BEGIN:VCALENDAR", "SUMMARY:Meeting", "X-WR-CALNAME:Home")
 }
+
+func TestHrefsAreEscapedLikeXandikos(t *testing.T) {
+	t.Parallel()
+
+	c := newClient(t)
+	cal := "/user/calendars/calendar/"
+	ev := strings.Replace(event, "UID:ev1", "UID:x@google.com", 1)
+
+	st, _, body := c.do("PUT", cal+"x%40google.com.ics", ev)
+	expect(t, "put", st, http.StatusCreated, body)
+
+	_, _, body = c.do("PROPFIND", cal, `<d:propfind xmlns:d="DAV:"><d:prop><d:getetag/></d:prop></d:propfind>`, "Depth", "1")
+	mustContain(t, "escaped href", body, "<d:href>/user/calendars/calendar/x%40google.com.ics</d:href>")
+
+	st, _, body = c.do("GET", cal+"x@google.com.ics", "")
+	expect(t, "unescaped request path", st, http.StatusOK, body)
+}

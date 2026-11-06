@@ -9,7 +9,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"path"
 	"strconv"
 	"strings"
@@ -124,8 +123,33 @@ func (h *Handler) href(parts ...string) string {
 	b.WriteString(h.opts.Prefix + "/")
 
 	for _, p := range parts {
-		b.WriteString(url.PathEscape(p))
+		b.WriteString(escapeSegment(p))
 		b.WriteString("/")
+	}
+
+	return b.String()
+}
+
+// escapeSegment percent-encodes everything but A-Z a-z 0-9 _ . - ~, as
+// Python's urllib.parse.quote does for Xandikos. Clients key objects by
+// their href string, so "a@b.ics" must stay "a%40b.ics" across a switch
+// between the two servers, or a phone would see a delete and an add.
+func escapeSegment(s string) string {
+	const hex = "0123456789ABCDEF"
+
+	var b strings.Builder
+
+	for i := range len(s) {
+		c := s[i]
+
+		switch {
+		case c >= 'A' && c <= 'Z', c >= 'a' && c <= 'z', c >= '0' && c <= '9', c == '_', c == '.', c == '-', c == '~':
+			b.WriteByte(c)
+		default:
+			b.WriteByte('%')
+			b.WriteByte(hex[c>>4])
+			b.WriteByte(hex[c&15])
+		}
 	}
 
 	return b.String()
@@ -140,7 +164,7 @@ func (h *Handler) collectionHref(k store.Kind, name string) string {
 }
 
 func (h *Handler) objectHref(k store.Kind, col, name string) string {
-	return h.collectionHref(k, col) + url.PathEscape(name)
+	return h.collectionHref(k, col) + escapeSegment(name)
 }
 
 func (h *Handler) resourceHref(r *resource) string {
