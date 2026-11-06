@@ -36,6 +36,10 @@ func Device(requester string) string {
 		return "Android · DAVx5 " + davx5Agent.FindStringSubmatch(requester)[1]
 	case strings.HasPrefix(requester, "farvardin web UI"):
 		return "Web UI"
+	case strings.HasPrefix(requester, "farvardin MCP ("):
+		return "MCP · " + strings.TrimSuffix(strings.TrimPrefix(requester, "farvardin MCP ("), ")")
+	case strings.HasPrefix(requester, "farvardin"):
+		return "farvardin"
 	case strings.HasPrefix(requester, "curl/"):
 		return "GitHub sync"
 	case strings.Contains(requester, "Thunderbird"):

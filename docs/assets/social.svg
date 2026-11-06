@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640" width="1280" height="640" role="img" aria-label="farvardin">
+  <title>farvardin</title>
+  <defs>
+    <radialGradient id="glow" cx="30%" cy="45%" r="60%">
+      <stop offset="0" stop-color="#20FFA0" stop-opacity=".16"/>
+      <stop offset="1" stop-color="#20FFA0" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="1280" height="640" fill="#282826"/>
+  <rect width="1280" height="640" fill="url(#glow)"/>
+  <g transform="translate(150 192) scale(8)">
+    <rect width="32" height="32" rx="9" fill="#323232"/>
+    <path d="M16 26c0-6.5.3-10-5.5-14.5 5.5 1 7 3.4 5.5 6.6 1.2-5.4 4.5-8.7 10-9.6-4.5 3.2-7 7.8-7 17.5z" fill="#20FFA0"/>
+    <circle cx="23.5" cy="23.5" r="3" fill="#FF69B4"/>
+  </g>
+  <text x="460" y="318" font-family="JetBrains Mono, Fira Code, Menlo, monospace" font-size="104" font-weight="700" letter-spacing="-3" fill="#F5F5F0">farvardin</text>
+  <text x="464" y="384" font-family="Inter, system-ui, sans-serif" font-size="34" fill="#A8A8A0">CardDAV &amp; CalDAV server, backed by git</text>
+  <text x="464" y="440" font-family="JetBrains Mono, Menlo, monospace" font-size="24" fill="#FFB040">vCard 3/4 · JSContact · WebDAV-Push · MCP · Raspberry Pi</text>
+  <text x="1220" y="600" text-anchor="end" font-family="Vazirmatn, Noto Sans Arabic, sans-serif" font-size="30" fill="#FF69B4" opacity=".85">فروردین</text>
+</svg>
