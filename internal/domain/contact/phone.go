@@ -113,10 +113,11 @@ func PhoneKeys(value, region string) []string {
 	return keys
 }
 
-// LintPhones reports phone numbers that do not work everywhere: a number
-// with no country code (it calls a different place, or nothing, from
-// abroad), a number that is not valid, and the same number twice. A
-// number without a country code gets a Fix when region is set.
+// LintPhones reports a number not in international form (from abroad it
+// calls a different place, or nothing), with its E.164 form as the Fix,
+// and the same number twice. A number the metadata does not know is not
+// reported: in a real address book those are SMS panel and service
+// senders (+98 1000..., +98 3000...), not typos.
 func LintPhones(c Card, region string) []Issue {
 	var issues []Issue
 
@@ -128,24 +129,15 @@ func LintPhones(c Card, region string) []Issue {
 			continue
 		}
 
-		intl := hasCountryCode(raw)
 		num := readTel(raw, region)
-		valid := num != nil && phonenumbers.IsValidNumber(num)
-
-		switch {
-		case valid && num.GetExtension() != "":
-			// E.164 cannot carry the extension; leave the number as it is.
-		case valid && !intl:
-			e164 := phonenumbers.Format(num, phonenumbers.E164)
-			issues = append(issues, Issue{Severity: Warning, Message: "TEL " + quote(raw) + " has no country code", Fix: e164})
-		case !valid && intl:
-			issues = append(issues, Issue{Severity: Warning, Message: "TEL " + quote(raw) + " is not a valid phone number", Fix: ""})
-		case !valid && region != "":
-			issues = append(issues, Issue{Severity: Warning, Message: "TEL " + quote(raw) + " is not a valid phone number in " + strings.ToUpper(region), Fix: ""})
+		if num == nil || !phonenumbers.IsValidNumber(num) {
+			continue
 		}
 
-		if !valid {
-			continue
+		// E.164 cannot carry an extension; such a number stays as it is.
+		if !hasCountryCode(raw) && num.GetExtension() == "" {
+			e164 := phonenumbers.Format(num, phonenumbers.E164)
+			issues = append(issues, Issue{Severity: Warning, Message: "TEL " + quote(raw) + " is not in international form", Fix: e164})
 		}
 
 		key := phonenumbers.Format(num, phonenumbers.E164)

@@ -268,7 +268,7 @@ func TestPhoneLintAndFix(t *testing.T) {
 	_ = resp.Body.Close()
 
 	pages := map[string][]string{
-		"/ui/lint":                                  {"has no country code → &#43;989123456789"},
+		"/ui/lint":                                  {"is not in international form → &#43;989123456789"},
 		"/ui/contacts/addressbook/b.vcf":            {"Add country codes (1)", `href="tel:&#43;989123456789"`},
 		"/ui/contacts/addressbook/?q=%2B98912345":   {"Babak"},
 		"/ui/contacts/addressbook/?q=0912+345+6789": {"Babak"},
@@ -305,7 +305,7 @@ func TestPhoneLintAndFix(t *testing.T) {
 		t.Fatalf("stored:\n%s\nwant:\n%s", data, want)
 	}
 
-	if _, body := get(t, c, srv.URL+"/ui/lint"); strings.Contains(body, "country code") {
+	if _, body := get(t, c, srv.URL+"/ui/lint"); strings.Contains(body, "international form") {
 		t.Fatal("still reported after the fix")
 	}
 }
