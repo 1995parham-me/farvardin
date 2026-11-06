@@ -26,9 +26,19 @@ type Config struct {
 	Calendars Calendars `json:"calendars" koanf:"calendars"`
 	Push      Push      `json:"push"      koanf:"push"`
 	UI        UI        `json:"ui"        koanf:"ui"`
+	// MCP serves the contacts and calendars to assistants.
+	MCP MCP `json:"mcp" koanf:"mcp"`
 	// Performance holds the knobs for small devices.
 	Performance Performance `json:"performance" koanf:"performance"`
 	Log         Log         `json:"log"         koanf:"log"`
+}
+
+// MCP configures the Model Context Protocol endpoint at /mcp.
+type MCP struct {
+	Enabled bool `json:"enabled" koanf:"enabled"`
+	// Tokens maps a name (written into each commit) to the SHA-256 hex of
+	// a bearer token; `farvardin mcp-token NAME` makes one.
+	Tokens map[string]string `json:"-" koanf:"tokens"`
 }
 
 // Performance bounds memory and CPU. The defaults suit a Raspberry Pi 4;
@@ -212,6 +222,10 @@ func (c Config) Validate() error {
 
 	if c.Store.Principal == "" || strings.ContainsAny(c.Store.Principal, "/.") || c.Store.Principal == "ui" || c.Store.Principal == "metrics" {
 		return fmt.Errorf("%w: store.principal %q is not usable", ErrInvalid, c.Store.Principal)
+	}
+
+	if c.MCP.Enabled && len(c.MCP.Tokens) == 0 {
+		return fmt.Errorf("%w: mcp.enabled needs at least one [mcp.tokens] entry", ErrInvalid)
 	}
 
 	switch c.UI.Auth {

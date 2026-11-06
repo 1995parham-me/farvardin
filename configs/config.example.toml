@@ -77,6 +77,15 @@ secure_cookie = true
 # [ui.users]
 # parham = "$2a$10$..."   # farvardin hash-password
 
+[mcp]
+# Model Context Protocol at /mcp (Streamable HTTP): assistants can search,
+# read, create, change and delete contacts and events. Every write goes
+# through the same checks as a phone's and is a git commit naming the token.
+enabled = false
+
+# [mcp.tokens]
+# claude = "<sha256 hex>"   # farvardin mcp-token claude
+
 [performance]
 # Defaults suit a Raspberry Pi 4. Measured on a 988-card, 32 MB address
 # book, a full first sync peaks at ~167 MiB with these defaults and at

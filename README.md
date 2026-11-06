@@ -33,6 +33,11 @@ The name: Xandikos is named after a spring month of the ancient Macedonian calen
 - A **birthdays calendar**, generated live from the address book: one yearly all-day event per birthday and anniversary, with an optional reminder. It updates the moment a card changes and syncs like any other calendar, read-only.
 - `GET` on a calendar collection returns one `.ics` with every event: a webcal feed for clients that only subscribe.
 
+**MCP**
+
+- A [Model Context Protocol](https://modelcontextprotocol.io) endpoint at `/mcp` (Streamable HTTP, bearer tokens): `search_contacts`, `get_contact`, `create_contact`, `update_contact`, `delete_contact`, `contact_history`, `restore_contact_photo`, `upcoming_birthdays`, `lint_contacts`, `list_calendars`, `list_events`, `get_event`, `create_event`, `update_event`, `delete_event`.
+- Writes take the etag that was read, go through the same validation as a phone's write, push to the phones, and are git commits naming the token, so an assistant's change can be seen and undone. Make a token with `farvardin mcp-token NAME`; the config keeps only its SHA-256.
+
 **Around the server**
 
 - A read-only **web UI** at `/ui/`: dashboard with the next 30 days of birthdays and recent changes, contact search, each contact with its photo, fields, git history and downloads (3.0, 4.0, JSContact), upcoming events, and a lint report. No JavaScript, no external assets, dark mode.
@@ -77,7 +82,8 @@ Clients keep their ETags (git blob ids) and their sync tokens (git tree ids), so
 farvardin serve          run the server (--listen, --root override the config)
 farvardin lint DIR|FILE  check vCards; exits 1 when a card has errors (-w for warnings)
 farvardin convert FILE   convert vCards: --to 3.0 | 4.0 | jscontact
-farvardin hash-password  print a bcrypt hash for [auth.users]
+farvardin hash-password  print a bcrypt hash for [auth.users] / [ui.users]
+farvardin mcp-token NAME make a bearer token for [mcp.tokens]
 ```
 
 Every config key can also be set from the environment: `FARVARDIN_SERVER__LISTEN=:8000`, `FARVARDIN_STORE__ROOT=/srv/dav`.

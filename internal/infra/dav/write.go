@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/1995parham-me/farvardin/internal/domain/contact"
-	"github.com/1995parham-me/farvardin/internal/infra/push"
 	"github.com/1995parham-me/farvardin/internal/infra/store"
 )
 
@@ -50,7 +49,7 @@ func (h *Handler) WriteCard(book, name string, data []byte, ifMatch, requester s
 		return "", fmt.Errorf("%w: UID already used by %s", ErrInvalidCard, owner)
 	}
 
-	etag, _, err := col.Put(name, data, store.Condition{IfMatch: ifMatch, IfNoneMatch: false}, requester)
+	etag, _, err := col.Put(name, data, store.Condition{IfMatch: ifMatch, IfNoneMatch: ifMatch == ""}, requester)
 	if errors.Is(err, store.ErrWorktree) {
 		h.log.Warn("write committed; worktree not refreshed", "object", name, "error", err)
 	} else if err != nil {
@@ -58,12 +57,7 @@ func (h *Handler) WriteCard(book, name string, data []byte, ifMatch, requester s
 	}
 
 	h.metrics.Write(string(store.AddressBook), "modified")
-
-	if h.opts.Push != nil {
-		if after, err := col.Snapshot(); err == nil {
-			h.opts.Push.Notify(col.Dir(), push.Change{SyncToken: syncToken(after), Properties: nil, SkipAll: false, Skip: nil})
-		}
-	}
+	h.pushChange(col)
 
 	return etag, nil
 }

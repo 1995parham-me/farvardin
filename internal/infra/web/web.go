@@ -95,7 +95,7 @@ func New(s *store.Store, parse Parser, birthdays BirthdaySource, opts Options, l
 		"short":    func(s string) string { return s[:min(8, len(s))] },
 		"kib":      func(n int64) string { return strconv.FormatInt((n+1023)/1024, 10) + " KiB" },
 		"join":     strings.Join,
-		"device":   device,
+		"device":   Device,
 		"pct":      func(a, b int) int { return a * 100 / max(b, 1) },
 		"tenth":    func(a, b int) int { return (a*10 + max(b, 1) - 1) / max(b, 1) },
 	}

@@ -15,6 +15,7 @@ import (
 
 	"github.com/1995parham-me/farvardin/internal/domain/contact"
 	"github.com/1995parham-me/farvardin/internal/infra/auth"
+	"github.com/1995parham-me/farvardin/internal/infra/mcpserver"
 )
 
 // errLintFailed makes `farvardin lint` exit non-zero for CI.
@@ -176,6 +177,29 @@ func hashPasswordCommand() *cli.Command {
 			}
 
 			fmt.Fprintln(os.Stdout, h)
+
+			return nil
+		},
+	}
+}
+
+func mcpTokenCommand() *cli.Command {
+	//nolint:exhaustruct // command literal
+	return &cli.Command{
+		Name:      "mcp-token",
+		Usage:     "make a bearer token for the MCP endpoint; prints the token (give it to the client) and the line for [mcp.tokens]",
+		ArgsUsage: "<name>",
+		Action: func(_ context.Context, cmd *cli.Command) error {
+			name := cmd.Args().First()
+			if name == "" {
+				name = "claude"
+			}
+
+			token, hash := mcpserver.NewToken()
+			fmt.Fprintln(os.Stdout, "token (keep it secret, give it to the client):")
+			fmt.Fprintln(os.Stdout, "  "+token)
+			fmt.Fprintln(os.Stdout, "config ([mcp.tokens]):")
+			fmt.Fprintf(os.Stdout, "  %s = %q\n", name, hash)
 
 			return nil
 		},

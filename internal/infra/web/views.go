@@ -22,9 +22,9 @@ var (
 	davx5Agent = regexp.MustCompile(`^DAVx5/([\d.]+)`)
 )
 
-// device turns a commit's Requester (the client's User-Agent) into a
+// Device turns a commit's Requester (the client's User-Agent) into a
 // short label. An empty requester is a commit made with git directly.
-func device(requester string) string {
+func Device(requester string) string {
 	switch {
 	case requester == "":
 		return "git"
@@ -77,7 +77,7 @@ func (h *Handler) timeline(book *store.Collection, revs []store.Revision) []entr
 	out := make([]entry, 0, len(revs))
 
 	for i, rev := range revs {
-		e := entry{Rev: rev, Device: device(rev.Requester), Summary: "", Kind: "edit"}
+		e := entry{Rev: rev, Device: Device(rev.Requester), Summary: "", Kind: "edit"}
 
 		switch {
 		case rev.ETag == "":
@@ -233,14 +233,14 @@ func (h *Handler) photoHistory(book *store.Collection, cur contact.Card, revs []
 
 		if i, ok := seen[key]; ok {
 			// An older revision with the same photo: it has had it since then.
-			out[i].Since, out[i].ETag, out[i].Device = rev.When, rev.ETag, device(rev.Requester)
+			out[i].Since, out[i].ETag, out[i].Device = rev.When, rev.ETag, Device(rev.Requester)
 
 			continue
 		}
 
 		seen[key] = len(out)
 		out = append(out, photoVersion{
-			ETag: rev.ETag, Since: rev.When, Device: device(rev.Requester), Width: p.Width, Height: p.Height,
+			ETag: rev.ETag, Since: rev.When, Device: Device(rev.Requester), Width: p.Width, Height: p.Height,
 			Current: key == curKey, Better: max(p.Width, p.Height) > curW,
 		})
 	}
@@ -573,13 +573,13 @@ func (h *Handler) dashboard(w http.ResponseWriter, r *http.Request) {
 
 			for i, rev := range revs {
 				if now.Sub(rev.When) <= 30*24*time.Hour {
-					devices[device(rev.Requester)]++
+					devices[Device(rev.Requester)]++
 				}
 
 				if i < 10 {
 					title, link := h.subject(c, kind, rev)
 					recent = append(recent, map[string]any{
-						"Rev": rev, "Collection": c.Name(), "Kind": string(kind), "Device": device(rev.Requester),
+						"Rev": rev, "Collection": c.Name(), "Kind": string(kind), "Device": Device(rev.Requester),
 						"Title": title, "Link": link,
 					})
 				}

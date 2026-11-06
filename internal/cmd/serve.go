@@ -20,6 +20,7 @@ import (
 	"github.com/1995parham-me/farvardin/internal/infra/auth"
 	"github.com/1995parham-me/farvardin/internal/infra/config"
 	"github.com/1995parham-me/farvardin/internal/infra/dav"
+	"github.com/1995parham-me/farvardin/internal/infra/mcpserver"
 	"github.com/1995parham-me/farvardin/internal/infra/metrics"
 	"github.com/1995parham-me/farvardin/internal/infra/push"
 	"github.com/1995parham-me/farvardin/internal/infra/store"
@@ -56,17 +57,9 @@ func newLogger(cfg config.Log) *slog.Logger {
 const uiPath = "/ui"
 
 func serve(ctx context.Context, cmd *cli.Command) error {
-	cfg, err := config.Load(cmd.String("config"))
+	cfg, err := loadConfig(cmd)
 	if err != nil {
 		return err
-	}
-
-	if cmd.IsSet("listen") {
-		cfg.Server.Listen = cmd.String("listen")
-	}
-
-	if cmd.IsSet("root") {
-		cfg.Store.Root = cmd.String("root")
 	}
 
 	log := newLogger(cfg.Log)
@@ -123,6 +116,10 @@ func serve(ctx context.Context, cmd *cli.Command) error {
 		}
 	}
 
+	if cfg.MCP.Enabled {
+		mountMCP(mux, cfg.MCP, s, davHandler, log)
+	}
+
 	if m != nil && cfg.Server.MetricsListen == "" {
 		mux.Handle("GET /metrics", m.Handler())
 	}
@@ -171,6 +168,32 @@ func serve(ctx context.Context, cmd *cli.Command) error {
 
 		return srv.Shutdown(shutdown) //nolint:wrapcheck // shutdown errors are reported as they are
 	}
+}
+
+func mountMCP(mux *http.ServeMux, cfg config.MCP, s *store.Store, d *dav.Handler, log *slog.Logger) {
+	mux.Handle("/mcp", mcpserver.Handler(mcpserver.Backend{
+		Store: s, Parse: d.Cache(), Full: d.Full(),
+		WriteCard: d.WriteCard, WriteEvent: d.WriteEvent, Delete: d.DeleteObject,
+	}, cfg.Tokens))
+	log.Info("MCP enabled", "path", "/mcp", "tokens", len(cfg.Tokens))
+}
+
+// loadConfig reads the config and applies the command-line overrides.
+func loadConfig(cmd *cli.Command) (config.Config, error) {
+	cfg, err := config.Load(cmd.String("config"))
+	if err != nil {
+		return cfg, err
+	}
+
+	if cmd.IsSet("listen") {
+		cfg.Server.Listen = cmd.String("listen")
+	}
+
+	if cmd.IsSet("root") {
+		cfg.Store.Root = cmd.String("root")
+	}
+
+	return cfg, nil
 }
 
 // applyLimits sets the process-wide limits for small devices.
