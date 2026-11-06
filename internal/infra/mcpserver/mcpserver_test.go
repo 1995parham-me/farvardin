@@ -132,7 +132,7 @@ func TestContactTools(t *testing.T) {
 	}
 
 	hist, _, _ := call[HistoryOut](t, cs, "contact_history", map[string]any{"id": created.ID})
-	if len(hist.Revisions) != 2 || hist.Revisions[0].Device != "farvardin" {
+	if len(hist.Revisions) != 2 || hist.Revisions[0].Device != "MCP · mcp" {
 		t.Fatalf("history: %+v", hist)
 	}
 
