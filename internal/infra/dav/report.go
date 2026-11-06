@@ -2,6 +2,7 @@ package dav
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -93,32 +94,40 @@ func (h *Handler) reportSync(w http.ResponseWriter, r *http.Request, res *resour
 	res.snap = snap
 	names, _ := requestedProps(body)
 	dataReq := dataRequest(body)
-
-	responses := make([]*response, 0, len(changed)+len(deleted))
+	ms := startMultistatus(w)
 
 	for _, o := range changed {
 		obj := h.objectResource(res, o)
 		resp := newResponse(h.resourceHref(obj))
 		h.fillProps(resp, obj, names, dataReq)
-		responses = append(responses, resp)
+		ms.add(resp)
 	}
 
 	for _, n := range deleted {
 		resp := newResponse(h.objectHref(res.home, res.col.Name(), n))
 		resp.status = http.StatusNotFound
-		responses = append(responses, resp)
+		ms.add(resp)
 	}
 
-	writeMultistatus(w, responses, textEl(NSDAV, "sync-token", syncToken(snap)))
+	ms.close(textEl(NSDAV, "sync-token", syncToken(snap)))
 }
 
 func (h *Handler) reportMultiget(w http.ResponseWriter, body *node) {
 	names, _ := requestedProps(body)
 	dataReq := dataRequest(body)
+	hrefs := body.children(NSDAV, "href")
 
-	var responses []*response
+	if len(hrefs) > h.opts.MaxMultigetHrefs {
+		writeError(w, http.StatusForbidden, el(NSDAV, "number-of-matches-within-limits"),
+			fmt.Sprintf("ask for at most %d objects per multiget", h.opts.MaxMultigetHrefs))
 
-	for _, hn := range body.children(NSDAV, "href") {
+		return
+	}
+
+	ms := startMultistatus(w)
+	defer ms.close()
+
+	for _, hn := range hrefs {
 		href := strings.TrimSpace(hn.Text)
 
 		p := href
@@ -130,17 +139,15 @@ func (h *Handler) reportMultiget(w http.ResponseWriter, body *node) {
 		if err != nil || obj.kind != resObject || !obj.exists {
 			resp := newResponse(href)
 			resp.status = http.StatusNotFound
-			responses = append(responses, resp)
+			ms.add(resp)
 
 			continue
 		}
 
 		resp := newResponse(h.resourceHref(obj))
 		h.fillProps(resp, obj, names, dataReq)
-		responses = append(responses, resp)
+		ms.add(resp)
 	}
-
-	writeMultistatus(w, responses)
 }
 
 type matcher func(col collection, o store.Object, filter *node) bool
@@ -168,7 +175,10 @@ func (h *Handler) reportQuery(w http.ResponseWriter, res *resource, body *node, 
 		}
 	}
 
-	var responses []*response
+	ms := startMultistatus(w)
+	defer ms.close()
+
+	n := 0
 
 	for _, o := range res.snap.Objects {
 		if filter != nil && !match(res.col, o, filter) {
@@ -178,14 +188,12 @@ func (h *Handler) reportQuery(w http.ResponseWriter, res *resource, body *node, 
 		obj := h.objectResource(res, o)
 		resp := newResponse(h.resourceHref(obj))
 		h.fillProps(resp, obj, names, dataReq)
-		responses = append(responses, resp)
+		ms.add(resp)
 
-		if limit > 0 && len(responses) >= limit {
+		if n++; limit > 0 && n >= limit {
 			break
 		}
 	}
-
-	writeMultistatus(w, responses)
 }
 
 // matchCard evaluates an RFC 6352 section 10.5 filter.

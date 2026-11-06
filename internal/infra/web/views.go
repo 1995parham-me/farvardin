@@ -110,7 +110,13 @@ func (h *Handler) describe(book *store.Collection, before, after string) (string
 		m := map[string][]string{}
 
 		for _, l := range c.Lines {
-			if !metadata[l.Name] {
+			switch {
+			case metadata[l.Name]:
+			case l.Name == "PHOTO":
+				// Slim cards keep the photo's identity, not its bytes.
+				info, _ := c.PhotoInfo()
+				m[l.Name] = append(m[l.Name], info.Key)
+			default:
 				m[l.Name] = append(m[l.Name], l.String()[len(l.Group):])
 			}
 		}
@@ -174,11 +180,11 @@ func (h *Handler) describe(book *store.Collection, before, after string) (string
 }
 
 func photoChange(a, b contact.Card) string {
-	pa, errA := a.Photo()
-	pb, errB := b.Photo()
+	pa, okA := a.PhotoInfo()
+	pb, okB := b.PhotoInfo()
 
 	switch {
-	case errA != nil || errB != nil:
+	case !okA || !okB:
 		return "photo changed"
 	case pa.Width == pb.Width && pa.Height == pb.Height:
 		return fmt.Sprintf("photo re-encoded (%d×%d)", pb.Width, pb.Height)
@@ -201,12 +207,8 @@ type photoVersion struct {
 // photoHistory lists the distinct photos in a card's history, newest
 // first.
 func (h *Handler) photoHistory(book *store.Collection, cur contact.Card, revs []store.Revision) []photoVersion {
-	curKey := cur.PhotoKey()
-
-	curW := 0
-	if p, err := cur.Photo(); err == nil {
-		curW = max(p.Width, p.Height)
-	}
+	curInfo, _ := cur.PhotoInfo()
+	curKey, curW := curInfo.Key, max(curInfo.Width, curInfo.Height)
 
 	var out []photoVersion
 
@@ -222,20 +224,17 @@ func (h *Handler) photoHistory(book *store.Collection, cur contact.Card, revs []
 			continue
 		}
 
-		key := card.PhotoKey()
-		if key == "" {
+		p, ok := card.PhotoInfo()
+		if !ok {
 			continue
 		}
+
+		key := p.Key
 
 		if i, ok := seen[key]; ok {
 			// An older revision with the same photo: it has had it since then.
 			out[i].Since, out[i].ETag, out[i].Device = rev.When, rev.ETag, device(rev.Requester)
 
-			continue
-		}
-
-		p, err := card.Photo()
-		if err != nil {
 			continue
 		}
 
@@ -261,6 +260,11 @@ func sameOrigin(r *http.Request) bool {
 	u, err := url.Parse(src)
 	if err != nil || u.Host == "" {
 		return false
+	}
+
+	// Behind a proxy that rewrites Host, the browser's host is forwarded.
+	if fwd := r.Header.Get("X-Forwarded-Host"); fwd != "" && u.Host == fwd {
+		return true
 	}
 
 	return u.Host == r.Host
@@ -316,8 +320,8 @@ func (h *Handler) restorePhoto(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cur, _, err1 := h.parse(book, obj.ETag)
-	old, _, err2 := h.parse(book, from)
+	cur, _, err1 := h.full(book, obj.ETag)
+	old, _, err2 := h.full(book, from)
 
 	if err1 != nil || err2 != nil || cur == nil || old == nil {
 		fail("could not read the card")
@@ -426,7 +430,7 @@ func (h *Handler) thumbnail(book *store.Collection, obj store.Object, size int) 
 		return t.data, t.media, true
 	}
 
-	card, _, err := h.parse(book, obj.ETag)
+	card, _, err := h.full(book, obj.ETag)
 	if err != nil || card == nil {
 		return nil, "", false
 	}
@@ -438,10 +442,14 @@ func (h *Handler) thumbnail(book *store.Collection, obj store.Object, size int) 
 
 	data, media, err := p.Thumbnail(size)
 	if err != nil {
-		data, media = p.Data, p.MediaType
+		// Not decodable (or too large to decode): serve it as it is, but
+		// do not let an original crowd out the thumbnails in the cache.
+		return p.Data, p.MediaType, true
 	}
 
-	h.thumbs.put(key, thumb{data: data, media: media})
+	if size > 0 {
+		h.thumbs.put(key, thumb{data: data, media: media})
+	}
 
 	return data, media, true
 }

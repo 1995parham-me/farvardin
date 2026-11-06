@@ -26,7 +26,31 @@ type Config struct {
 	Calendars Calendars `json:"calendars" koanf:"calendars"`
 	Push      Push      `json:"push"      koanf:"push"`
 	UI        UI        `json:"ui"        koanf:"ui"`
-	Log       Log       `json:"log"       koanf:"log"`
+	// Performance holds the knobs for small devices.
+	Performance Performance `json:"performance" koanf:"performance"`
+	Log         Log         `json:"log"         koanf:"log"`
+}
+
+// Performance bounds memory and CPU. The defaults suit a Raspberry Pi 4;
+// see configs/config.example.toml for a 256-512 MB board.
+type Performance struct {
+	// MemoryLimitMB sets Go's soft memory limit (like GOMEMLIMIT); 0 = off.
+	MemoryLimitMB int `json:"memory_limit_mb" koanf:"memory_limit_mb"`
+	// ObjectCacheMB is go-git's decoded-object cache per collection.
+	ObjectCacheMB int `json:"object_cache_mb" koanf:"object_cache_mb"`
+	// ParseCacheEntries bounds the parsed-object cache (~2 KB per card).
+	ParseCacheEntries int `json:"parse_cache_entries" koanf:"parse_cache_entries"`
+	// ThumbnailCacheMB bounds the scaled-photo cache of the UI.
+	ThumbnailCacheMB int `json:"thumbnail_cache_mb" koanf:"thumbnail_cache_mb"`
+	// MaxImagePixels refuses to decode larger images (decompression bombs).
+	MaxImagePixels int64 `json:"max_image_pixels" koanf:"max_image_pixels"`
+	// Warm builds the history index and avatar cache in the background,
+	// WarmDelay after start, pausing WarmPause between avatars.
+	Warm      bool          `json:"warm"       koanf:"warm"`
+	WarmDelay time.Duration `json:"warm_delay" koanf:"warm_delay"`
+	WarmPause time.Duration `json:"warm_pause" koanf:"warm_pause"`
+	// MaxMultigetHrefs refuses multiget reports asking for more objects.
+	MaxMultigetHrefs int `json:"max_multiget_hrefs" koanf:"max_multiget_hrefs"`
 }
 
 // UI configures the web UI's own login.
@@ -126,7 +150,11 @@ func Default() Config {
 		Calendars: Calendars{Birthdays: true, BirthdayAlarmDays: 0, BirthdayColor: "#FF2D55", UserAddress: ""},
 		Push:      Push{Enabled: false, StateDir: "/var/lib/farvardin/state", Subject: "mailto:farvardin@localhost"},
 		UI:        UI{Auth: "proxy", Users: nil, SessionTTL: 7 * 24 * time.Hour, SecretFile: "/var/lib/farvardin/ui-session.key", SecureCookie: true}, //nolint:gosec // a file path, not a credential
-		Log:       Log{Level: "info", Format: "text"},
+		Performance: Performance{
+			MemoryLimitMB: 0, ObjectCacheMB: 8, ParseCacheEntries: 4096, ThumbnailCacheMB: 16,
+			MaxImagePixels: 16_000_000, Warm: true, WarmDelay: 20 * time.Second, WarmPause: 0, MaxMultigetHrefs: 2000,
+		},
+		Log: Log{Level: "info", Format: "text"},
 	}
 }
 

@@ -3,13 +3,14 @@ package dav
 import (
 	"crypto/sha1" //nolint:gosec // ETags of generated objects use the same digest as git blob ids; not a security use
 	"encoding/hex"
-	"maps"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
 
 	"github.com/1995parham-me/farvardin/internal/domain/calendar"
 	"github.com/1995parham-me/farvardin/internal/domain/contact"
+	"github.com/1995parham-me/farvardin/internal/infra/lru"
 	"github.com/1995parham-me/farvardin/internal/infra/store"
 )
 
@@ -31,31 +32,26 @@ type writable interface {
 	SetMeta(meta store.Meta, requester string) error
 }
 
-// parsed is a cached, parsed object.
+// parsed is a cached, parsed object. Cards are slim: their photo bytes
+// are dropped (see contact.Card.Slim), so the cache stays small.
 type parsed struct {
 	card *contact.Card
 	cal  *calendar.Component
 	err  error
 }
 
-// cache keeps parsed objects by blob id. Blob ids are content hashes, so
-// entries never go stale; the cache is only bounded in size.
+// cache keeps parsed objects by blob id, least recently used first out.
+// Blob ids are content hashes, so entries never go stale.
 type cache struct {
-	mu      sync.Mutex
-	entries map[string]parsed
-	max     int
+	lru *lru.Cache[string, parsed]
 }
 
 func newCache(maxEntries int) *cache {
-	return &cache{mu: sync.Mutex{}, entries: map[string]parsed{}, max: maxEntries}
+	return &cache{lru: lru.New[string, parsed](maxEntries, nil)}
 }
 
 func (c *cache) get(col collection, etag string) parsed {
-	c.mu.Lock()
-	p, ok := c.entries[etag]
-	c.mu.Unlock()
-
-	if ok {
+	if p, ok := c.lru.Get(etag); ok {
 		return p
 	}
 
@@ -64,17 +60,25 @@ func (c *cache) get(col collection, etag string) parsed {
 		return parsed{card: nil, cal: nil, err: err}
 	}
 
-	p = parse(col.Kind(), data)
-
-	c.mu.Lock()
-	if len(c.entries) >= c.max {
-		clear(c.entries)
+	p := parse(col.Kind(), data)
+	if p.card != nil {
+		slim := p.card.Slim()
+		p.card = &slim
 	}
 
-	c.entries[etag] = p
-	c.mu.Unlock()
+	c.lru.Put(etag, p)
 
 	return p
+}
+
+// full parses an object with its photo bytes, bypassing the cache.
+func full(col collection, etag string) parsed {
+	data, err := col.ReadBlob(etag)
+	if err != nil {
+		return parsed{card: nil, cal: nil, err: err}
+	}
+
+	return parse(col.Kind(), data)
 }
 
 func parse(kind store.Kind, data []byte) parsed {
@@ -124,15 +128,23 @@ type birthdays struct {
 	opts  calendar.BirthdayOptions
 	color string
 
-	mu    sync.Mutex
-	gen   map[string]*store.Snapshot // address book token -> generated snapshot
-	blobs map[string][]byte          // etag -> data
+	// mu is held for a whole generation, so one token is built once.
+	mu  sync.Mutex
+	gen []generation // newest last, a few kept for recent sync tokens
 }
 
-const birthdaysName = "birthdays"
+type generation struct {
+	snap  *store.Snapshot
+	blobs map[string][]byte
+}
+
+const (
+	birthdaysName  = "birthdays"
+	keptGeneration = 8
+)
 
 func newBirthdays(book *store.Collection, c *cache, opts calendar.BirthdayOptions, color string) *birthdays {
-	return &birthdays{book: book, cache: c, opts: opts, color: color, mu: sync.Mutex{}, gen: map[string]*store.Snapshot{}, blobs: map[string][]byte{}}
+	return &birthdays{book: book, cache: c, opts: opts, color: color, mu: sync.Mutex{}, gen: nil}
 }
 
 // Name is the collection name.
@@ -166,22 +178,24 @@ func (b *birthdays) ReadBlob(etag string) ([]byte, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	data, ok := b.blobs[etag]
-	if !ok {
-		return nil, store.ErrNotFound
+	for _, g := range slices.Backward(b.gen) {
+		if data, ok := g.blobs[etag]; ok {
+			return data, nil
+		}
 	}
 
-	return data, nil
+	return nil, store.ErrNotFound
 }
 
 func (b *birthdays) generate(src *store.Snapshot) *store.Snapshot {
 	b.mu.Lock()
-	if s, ok := b.gen[src.Token]; ok {
-		b.mu.Unlock()
+	defer b.mu.Unlock()
 
-		return s
+	for _, g := range b.gen {
+		if g.snap.Token == src.Token {
+			return g.snap
+		}
 	}
-	b.mu.Unlock()
 
 	var objects []store.Object
 
@@ -212,20 +226,9 @@ func (b *birthdays) generate(src *store.Snapshot) *store.Snapshot {
 
 	snap := store.NewSnapshot(src.Token, objects, meta)
 
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	// Keep the newest few generations; sync clients ask for recent tokens.
-	if len(b.gen) > 8 {
-		clear(b.gen)
-	}
-
-	b.gen[src.Token] = snap
-
-	maps.Copy(b.blobs, blobs)
-
-	if len(b.blobs) > 20000 {
-		b.blobs = blobs
+	b.gen = append(b.gen, generation{snap: snap, blobs: blobs})
+	if len(b.gen) > keptGeneration {
+		b.gen = b.gen[len(b.gen)-keptGeneration:]
 	}
 
 	return snap

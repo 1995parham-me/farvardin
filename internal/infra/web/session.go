@@ -57,6 +57,18 @@ type Sessions struct {
 
 	mu       sync.Mutex
 	failures map[string][]time.Time
+	revoked  map[string]time.Time // token id -> its expiry
+}
+
+// bcryptSlots runs one password check at a time: bcrypt costs up to a
+// second on a small board, and parallel attempts would starve the server.
+var bcryptSlots = make(chan struct{}, 1)
+
+func checkPassword(hash, password string) bool {
+	bcryptSlots <- struct{}{}
+	defer func() { <-bcryptSlots }()
+
+	return bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) == nil
 }
 
 type claims struct {
@@ -100,7 +112,11 @@ func NewSessions(opts SessionOptions) (*Sessions, error) {
 		opts.TTL = 7 * 24 * time.Hour
 	}
 
-	return &Sessions{opts: opts, secret: secret, mu: sync.Mutex{}, failures: map[string][]time.Time{}}, nil
+	// Made now, not on the first unknown user, so that request is not
+	// slower than a known one.
+	_ = dummyHash()
+
+	return &Sessions{opts: opts, secret: secret, mu: sync.Mutex{}, failures: map[string][]time.Time{}, revoked: map[string]time.Time{}}, nil
 }
 
 func passwordTag(hash string) string {
@@ -151,6 +167,12 @@ func (s *Sessions) Login(r *http.Request, user, password string) (string, error)
 
 	s.mu.Lock()
 	locked := s.recentFailures(ip, now) >= maxFailures
+
+	if len(s.failures) > 1024 {
+		for other := range s.failures {
+			s.recentFailures(other, now)
+		}
+	}
 	s.mu.Unlock()
 
 	if locked {
@@ -160,10 +182,10 @@ func (s *Sessions) Login(r *http.Request, user, password string) (string, error)
 	hash, ok := s.opts.Users[user]
 	if !ok {
 		// Same cost as a real check, so user names do not leak.
-		_ = bcrypt.CompareHashAndPassword(dummyHash(), []byte(password))
+		_ = checkPassword(string(dummyHash()), password)
 	}
 
-	if !ok || bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) != nil {
+	if !ok || !checkPassword(hash, password) {
 		s.mu.Lock()
 		s.failures[ip] = append(s.failures[ip], now)
 		s.mu.Unlock()
@@ -219,7 +241,45 @@ func (s *Sessions) User(r *http.Request) (string, error) {
 		return "", ErrNoSession
 	}
 
+	s.mu.Lock()
+	_, gone := s.revoked[cl.ID]
+	s.mu.Unlock()
+
+	if gone {
+		return "", ErrNoSession
+	}
+
 	return cl.Subject, nil
+}
+
+// Revoke ends the request's session on the server too, so a copied token
+// stops working at logout, not only when it expires. Revocations live in
+// memory: a restart forgets them, and the tokens still expire on time.
+func (s *Sessions) Revoke(r *http.Request) {
+	c, err := r.Cookie(CookieName)
+	if err != nil {
+		return
+	}
+
+	var cl claims
+
+	if _, err := jwt.ParseWithClaims(c.Value, &cl, func(*jwt.Token) (any, error) { return s.secret, nil },
+		jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()})); err != nil || cl.ExpiresAt == nil {
+		return
+	}
+
+	now := time.Now()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for id, exp := range s.revoked {
+		if exp.Before(now) {
+			delete(s.revoked, id)
+		}
+	}
+
+	s.revoked[cl.ID] = cl.ExpiresAt.Time
 }
 
 // SetCookie stores the token in the session cookie.

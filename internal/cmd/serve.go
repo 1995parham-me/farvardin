@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"syscall"
 	"time"
@@ -70,7 +71,11 @@ func serve(ctx context.Context, cmd *cli.Command) error {
 
 	log := newLogger(cfg.Log)
 
-	s, err := store.Open(cfg.Store.Root, cfg.Store.Principal, store.Author{Name: cfg.Store.AuthorName, Email: cfg.Store.AuthorEmail})
+	applyLimits(cfg.Performance)
+
+	s, err := store.OpenWithOptions(cfg.Store.Root, cfg.Store.Principal,
+		store.Author{Name: cfg.Store.AuthorName, Email: cfg.Store.AuthorEmail},
+		store.Options{ObjectCacheBytes: int64(cfg.Performance.ObjectCacheMB) << 20})
 	if err != nil {
 		return fmt.Errorf("opening store: %w", err)
 	}
@@ -113,7 +118,9 @@ func serve(ctx context.Context, cmd *cli.Command) error {
 			mux.Handle(uiPath+"/", guard.Wrap(ui))
 		}
 
-		go ui.Warm(ctx)
+		if cfg.Performance.Warm {
+			go ui.Warm(ctx, cfg.Performance.WarmDelay, cfg.Performance.WarmPause)
+		}
 	}
 
 	if m != nil && cfg.Server.MetricsListen == "" {
@@ -131,7 +138,11 @@ func serve(ctx context.Context, cmd *cli.Command) error {
 		Addr:              cfg.Server.Listen,
 		Handler:           logRequests(log, m, mux),
 		ReadHeaderTimeout: 10 * time.Second,
-		IdleTimeout:       2 * time.Minute,
+		// A slow client cannot hold a goroutine and a 10 MB body forever.
+		// No WriteTimeout: a first sync over a slow mobile link may take
+		// minutes to download.
+		ReadTimeout: 2 * time.Minute,
+		IdleTimeout: 2 * time.Minute,
 	}
 
 	ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
@@ -162,6 +173,17 @@ func serve(ctx context.Context, cmd *cli.Command) error {
 	}
 }
 
+// applyLimits sets the process-wide limits for small devices.
+func applyLimits(p config.Performance) {
+	if p.MemoryLimitMB > 0 {
+		debug.SetMemoryLimit(int64(p.MemoryLimitMB) << 20)
+	}
+
+	if p.MaxImagePixels > 0 {
+		contact.MaxPixels = p.MaxImagePixels
+	}
+}
+
 func davOptions(cfg config.Config, uiPath string, pushSvc *push.Service) dav.Options {
 	return dav.Options{
 		Prefix:          cfg.Server.Prefix,
@@ -177,6 +199,8 @@ func davOptions(cfg config.Config, uiPath string, pushSvc *push.Service) dav.Opt
 		AllowCollectionDelete: false,
 		CalendarUserAddress:   cfg.Calendars.UserAddress,
 		Push:                  pushSvc,
+		CacheEntries:          cfg.Performance.ParseCacheEntries,
+		MaxMultigetHrefs:      cfg.Performance.MaxMultigetHrefs,
 	}
 }
 
@@ -195,7 +219,7 @@ func newUI(cfg config.Config, s *store.Store, d *dav.Handler, log *slog.Logger) 
 		}
 	}
 
-	ui, err := web.New(s, d.Cache(), d.Birthdays, web.Options{Prefix: uiPath, DAVPrefix: cfg.Server.Prefix, Sessions: sessions, Writer: d.WriteCard}, log)
+	ui, err := web.New(s, d.Cache(), d.Birthdays, web.Options{Prefix: uiPath, DAVPrefix: cfg.Server.Prefix, Sessions: sessions, Writer: d.WriteCard, Full: d.Full(), ThumbnailCacheBytes: cfg.Performance.ThumbnailCacheMB << 20}, log)
 	if err != nil {
 		return nil, fmt.Errorf("ui: %w", err)
 	}

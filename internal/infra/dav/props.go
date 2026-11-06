@@ -93,7 +93,8 @@ func (h *Handler) servePropfind(w http.ResponseWriter, r *http.Request) {
 		targets = append(targets, h.members(res)...)
 	}
 
-	responses := make([]*response, 0, len(targets))
+	ms := startMultistatus(w)
+	defer ms.close()
 
 	for _, t := range targets {
 		resp := newResponse(h.resourceHref(t))
@@ -106,10 +107,8 @@ func (h *Handler) servePropfind(w http.ResponseWriter, r *http.Request) {
 			h.fillProps(resp, t, names, nil)
 		}
 
-		responses = append(responses, resp)
+		ms.add(resp)
 	}
-
-	writeMultistatus(w, responses)
 }
 
 // members lists the children of a resource for Depth: 1.

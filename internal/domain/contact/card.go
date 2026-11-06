@@ -22,6 +22,10 @@ var (
 // original order.
 type Card struct {
 	Lines []vcf.Line
+
+	// slim is set on a card whose binary values (PHOTO, LOGO, ...) were
+	// dropped by Slim; it keeps what is known about the photo.
+	slim *PhotoInfo
 }
 
 // ParseAll returns every vCard found in data.
@@ -187,7 +191,7 @@ func (c *Card) insertBeforeEnd(l vcf.Line) {
 
 // Clone returns a deep copy.
 func (c Card) Clone() Card {
-	out := Card{Lines: make([]vcf.Line, len(c.Lines))}
+	out := Card{Lines: make([]vcf.Line, len(c.Lines)), slim: c.slim}
 
 	for i, l := range c.Lines {
 		params := make([]vcf.Param, len(l.Params))

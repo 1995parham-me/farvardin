@@ -44,6 +44,10 @@ type Options struct {
 	CalendarUserAddress string
 	// Push enables WebDAV-Push; nil turns it off.
 	Push *push.Service
+	// CacheEntries bounds the parsed-object cache (slim cards are ~2 KB).
+	CacheEntries int
+	// MaxMultigetHrefs refuses multiget reports asking for more objects.
+	MaxMultigetHrefs int
 }
 
 // Handler is the DAV http.Handler.
@@ -65,13 +69,31 @@ func New(s *store.Store, opts Options, log *slog.Logger, m *metrics.Metrics) *Ha
 		opts.MaxResourceSize = 10 << 20
 	}
 
-	return &Handler{store: s, opts: opts, log: log, metrics: m, cache: newCache(20000), bdayMu: sync.Mutex{}, bday: nil}
+	if opts.CacheEntries <= 0 {
+		opts.CacheEntries = 4096
+	}
+
+	if opts.MaxMultigetHrefs <= 0 {
+		opts.MaxMultigetHrefs = 2000
+	}
+
+	return &Handler{store: s, opts: opts, log: log, metrics: m, cache: newCache(opts.CacheEntries), bdayMu: sync.Mutex{}, bday: nil}
 }
 
 // Cache exposes parsed objects to the web UI so both share one cache.
 func (h *Handler) Cache() func(col *store.Collection, etag string) (*contact.Card, *calendar.Component, error) {
 	return func(col *store.Collection, etag string) (*contact.Card, *calendar.Component, error) {
 		p := h.cache.get(col, etag)
+
+		return p.card, p.cal, p.err
+	}
+}
+
+// Full parses an object with its photo bytes (uncached), for the few
+// callers that need them: thumbnails, photo restore.
+func (h *Handler) Full() func(col *store.Collection, etag string) (*contact.Card, *calendar.Component, error) {
+	return func(col *store.Collection, etag string) (*contact.Card, *calendar.Component, error) {
+		p := full(col, etag)
 
 		return p.card, p.cal, p.err
 	}
@@ -605,7 +627,9 @@ func (h *Handler) servePut(w http.ResponseWriter, r *http.Request) {
 	}
 
 	etag, created, err := col.Put(res.name, stored, cond, requester(r))
-	if err != nil {
+	if errors.Is(err, store.ErrWorktree) {
+		h.log.Warn("write committed; worktree not refreshed", "object", res.name, "error", err)
+	} else if err != nil {
 		h.fail(w, r, err)
 
 		return
@@ -678,7 +702,7 @@ func (h *Handler) checkCard(w http.ResponseWriter, res *resource, body []byte) (
 
 	var prev *contact.Card
 	if res.exists {
-		prev = h.cache.get(res.col, res.obj.ETag).card
+		prev = full(res.col, res.obj.ETag).card
 	}
 
 	out, action := contact.ApplyPhotoPolicy(card, prev, h.opts.Photo)
@@ -756,7 +780,9 @@ func (h *Handler) serveDelete(w http.ResponseWriter, r *http.Request) {
 		}
 
 		cond := store.Condition{IfMatch: etagFrom(r.Header.Get("If-Match")), IfNoneMatch: false}
-		if err := col.Delete(res.name, cond, requester(r)); err != nil {
+		if err := col.Delete(res.name, cond, requester(r)); errors.Is(err, store.ErrWorktree) {
+			h.log.Warn("delete committed; worktree not refreshed", "object", res.name, "error", err)
+		} else if err != nil {
 			h.fail(w, r, err)
 
 			return

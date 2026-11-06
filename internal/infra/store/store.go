@@ -65,13 +65,25 @@ type Store struct {
 	principal string
 	author    Author
 
+	cacheBytes  int64
 	mu          sync.Mutex
 	collections map[string]*Collection // key: "<home>/<name>"
 }
 
+// Options tunes the store.
+type Options struct {
+	// ObjectCacheBytes bounds go-git's object cache per collection.
+	ObjectCacheBytes int64
+}
+
 // Open opens the principal directory under root and finds its collections.
 func Open(root, principal string, author Author) (*Store, error) {
-	s := &Store{root: root, principal: principal, author: author, mu: sync.Mutex{}, collections: map[string]*Collection{}}
+	return OpenWithOptions(root, principal, author, Options{ObjectCacheBytes: DefaultObjectCache})
+}
+
+// OpenWithOptions is Open with tuning.
+func OpenWithOptions(root, principal string, author Author, opts Options) (*Store, error) {
+	s := &Store{root: root, principal: principal, author: author, cacheBytes: opts.ObjectCacheBytes, mu: sync.Mutex{}, collections: map[string]*Collection{}}
 
 	if err := s.Rescan(); err != nil {
 		return nil, err
@@ -110,7 +122,7 @@ func (s *Store) Rescan() error {
 				continue
 			}
 
-			c, err := openCollection(filepath.Join(home, e.Name()), e.Name(), kind, s.author)
+			c, err := openCollection(filepath.Join(home, e.Name()), e.Name(), kind, s.author, s.cacheBytes)
 			if err != nil {
 				return err
 			}
@@ -180,7 +192,7 @@ func (s *Store) Create(kind Kind, name string, meta Meta, requester string) (*Co
 		return nil, fmt.Errorf("creating %s: %w", dir, err)
 	}
 
-	c, err := openCollection(dir, name, kind, s.author)
+	c, err := openCollection(dir, name, kind, s.author, s.cacheBytes)
 	if err != nil {
 		return nil, err
 	}

@@ -92,7 +92,7 @@ func setup(t *testing.T) (*httptest.Server, *http.Client, *store.Collection) {
 		t.Fatal(err)
 	}
 
-	ui, err := web.New(s, d.Cache(), d.Birthdays, web.Options{Prefix: "/ui", DAVPrefix: "", Sessions: sessions, Writer: d.WriteCard}, log)
+	ui, err := web.New(s, d.Cache(), d.Birthdays, web.Options{Prefix: "/ui", DAVPrefix: "", Sessions: sessions, Writer: d.WriteCard, Full: d.Full(), ThumbnailCacheBytes: 1 << 20}, log)
 	if err != nil {
 		t.Fatal(err)
 	}

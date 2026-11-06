@@ -74,6 +74,10 @@ func (l *Line) SetParam(name string, values ...string) {
 	}
 }
 
+// DropValue clears the value and the kept raw bytes, to keep a parsed
+// document small (for example a cached card without its photo bytes).
+func (l *Line) DropValue() { l.Value, l.raw, l.orig = "", "", "" }
+
 // Text returns the value with RFC 6350 escapes removed.
 func (l Line) Text() string { return Unescape(l.Value) }
 

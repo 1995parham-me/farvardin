@@ -64,6 +64,33 @@ enabled = false
 state_dir = "/var/lib/farvardin/state"
 subject = "mailto:farvardin@localhost"
 
+[ui]
+# "proxy": /ui/ is guarded like the DAV tree ([auth], or a proxy in front).
+# "jwt": farvardin's own login page; signed session cookie scoped to /ui.
+auth = "proxy"
+session_ttl = "168h"
+# The session signing key; created (mode 0600) when missing.
+secret_file = "/var/lib/farvardin/ui-session.key"
+# Only turn this off to test over plain HTTP.
+secure_cookie = true
+
+# [ui.users]
+# parham = "$2a$10$..."   # farvardin hash-password
+
+[performance]
+# Defaults suit a Raspberry Pi 4. Measured on a 988-card, 32 MB address
+# book, a full first sync peaks at ~167 MiB with these defaults and at
+# ~87 MiB with the small-board values in the comments.
+memory_limit_mb = 0        # small board: 64 (Go's soft limit, like GOMEMLIMIT)
+object_cache_mb = 8        # go-git's cache per collection; small board: 2
+parse_cache_entries = 4096 # slim cards, ~2 KB each
+thumbnail_cache_mb = 16    # small board: 4
+max_image_pixels = 16000000
+warm = true                # build the history index and avatars in the background
+warm_delay = "20s"
+warm_pause = "0s"          # single-core board: "20ms", keeps a core for requests
+max_multiget_hrefs = 2000
+
 [log]
 level = "info"   # debug, info, warn, error
 format = "text"  # text or json

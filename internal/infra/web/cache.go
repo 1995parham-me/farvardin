@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/1995parham-me/farvardin/internal/infra/lru"
 	"github.com/1995parham-me/farvardin/internal/infra/store"
 )
 
@@ -25,40 +26,24 @@ type thumb struct {
 	media string
 }
 
-// thumbCache keeps scaled photos by "<blob id>-<size>". Blob ids are
-// content hashes, so entries never go stale; the cache is only bounded.
+// thumbCache keeps scaled photos by "<blob id>-<size>", least recently
+// used out first, within a byte budget. Blob ids are content hashes, so
+// entries never go stale.
 type thumbCache struct {
-	mu    sync.Mutex
-	items map[string]thumb
-	bytes int
-	max   int
+	lru *lru.Cache[string, thumb]
 }
 
 func newThumbCache(maxBytes int) *thumbCache {
-	return &thumbCache{mu: sync.Mutex{}, items: map[string]thumb{}, bytes: 0, max: maxBytes}
-}
-
-func (c *thumbCache) get(key string) (thumb, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	t, ok := c.items[key]
-
-	return t, ok
-}
-
-func (c *thumbCache) put(key string, t thumb) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if c.bytes+len(t.data) > c.max {
-		clear(c.items)
-		c.bytes = 0
+	if maxBytes <= 0 {
+		maxBytes = 16 << 20
 	}
 
-	c.items[key] = t
-	c.bytes += len(t.data)
+	return &thumbCache{lru: lru.New[string, thumb](maxBytes, func(t thumb) int { return len(t.data) + 64 })}
 }
+
+func (c *thumbCache) get(key string) (thumb, bool) { return c.lru.Get(key) }
+
+func (c *thumbCache) put(key string, t thumb) { c.lru.Put(key, t) }
 
 // listCache keeps the rendered rows of a contact list until the address
 // book changes (its sync token moves).
@@ -97,7 +82,14 @@ const AvatarSize = 96
 // collection, the contact lists and every avatar thumbnail. On a
 // Raspberry Pi a cold avatar costs ~70 ms (JPEG decode + scale), so a
 // cold contact list would cost a minute of CPU; warmed, it costs nothing.
-func (h *Handler) Warm(ctx context.Context) {
+func (h *Handler) Warm(ctx context.Context, delay, pause time.Duration) {
+	// Let the server answer its first requests before the work starts.
+	select {
+	case <-ctx.Done():
+		return
+	case <-time.After(delay):
+	}
+
 	start := time.Now()
 
 	for _, kind := range []store.Kind{store.AddressBook, store.Calendar} {
@@ -132,6 +124,10 @@ func (h *Handler) Warm(ctx context.Context) {
 				if _, _, ok := h.thumbnail(book, obj, AvatarSize); ok {
 					n++
 				}
+			}
+
+			if pause > 0 {
+				time.Sleep(pause) // a slow board keeps a core free for requests
 			}
 		}
 	}

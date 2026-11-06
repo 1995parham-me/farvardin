@@ -73,15 +73,47 @@ type Collection struct {
 	mu   sync.Mutex
 	last *Snapshot
 	hist history
+
+	// sizes remembers object sizes by blob id, so a new snapshot after a
+	// write does not open every loose object again (one open per object
+	// per PUT is slow on an SD card).
+	sizesMu sync.Mutex
+	sizes   map[plumbing.Hash]int64
 }
 
-func openCollection(dir, name string, kind Kind, author Author) (*Collection, error) {
-	repo, err := git.PlainOpen(dir)
+func openCollection(dir, name string, kind Kind, author Author, cacheBytes int64) (*Collection, error) {
+	repo, err := openRepo(dir, cacheBytes)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %s: %w", ErrCollectionDir, dir, err)
+		return nil, fmt.Errorf("%w: %w", ErrCollectionDir, err)
 	}
 
-	return &Collection{dir: dir, name: name, kind: kind, author: author, repo: repo, mu: sync.Mutex{}, last: nil, hist: history{mu: sync.Mutex{}, upTo: plumbing.ZeroHash, byName: nil}}, nil
+	return &Collection{
+		dir: dir, name: name, kind: kind, author: author, repo: repo, mu: sync.Mutex{}, last: nil,
+		hist:    history{mu: sync.Mutex{}, upTo: plumbing.ZeroHash, byName: nil},
+		sizesMu: sync.Mutex{}, sizes: map[plumbing.Hash]int64{},
+	}, nil
+}
+
+func (c *Collection) size(h plumbing.Hash) int64 {
+	c.sizesMu.Lock()
+	n, ok := c.sizes[h]
+	c.sizesMu.Unlock()
+
+	if ok {
+		return n
+	}
+
+	n, _ = c.repo.Storer.EncodedObjectSize(h)
+
+	c.sizesMu.Lock()
+	if len(c.sizes) > 100_000 {
+		clear(c.sizes)
+	}
+
+	c.sizes[h] = n
+	c.sizesMu.Unlock()
+
+	return n
 }
 
 // Dir returns the collection's directory.
@@ -168,9 +200,8 @@ func (c *Collection) snapshotOf(tree *object.Tree) *Snapshot {
 			continue
 		}
 
-		size, _ := c.repo.Storer.EncodedObjectSize(e.Hash)
 		snap.byName[e.Name] = len(snap.Objects)
-		snap.Objects = append(snap.Objects, Object{Name: e.Name, ETag: e.Hash.String(), Size: size})
+		snap.Objects = append(snap.Objects, Object{Name: e.Name, ETag: e.Hash.String(), Size: c.size(e.Hash)})
 	}
 
 	return snap
@@ -312,7 +343,7 @@ func (c *Collection) Put(name string, data []byte, cond Condition, requester str
 	}
 
 	if err := c.writeWorktree(name, data, h); err != nil {
-		return "", false, err
+		return h.String(), !exists, errors.Join(ErrWorktree, err)
 	}
 
 	return h.String(), !exists, nil
@@ -341,7 +372,11 @@ func (c *Collection) Delete(name string, cond Condition, requester string) error
 		return err
 	}
 
-	return c.writeWorktree(name, nil, plumbing.ZeroHash)
+	if err := c.writeWorktree(name, nil, plumbing.ZeroHash); err != nil {
+		return errors.Join(ErrWorktree, err)
+	}
+
+	return nil
 }
 
 // SetMeta replaces the collection metadata.
@@ -364,7 +399,11 @@ func (c *Collection) writeMeta(meta Meta, message, requester string) error {
 		return err
 	}
 
-	return c.writeWorktree(MetaFile, data, h)
+	if err := c.writeWorktree(MetaFile, data, h); err != nil {
+		return errors.Join(ErrWorktree, err)
+	}
+
+	return nil
 }
 
 func checkCondition(cond Condition, cur Object, exists bool) error {
@@ -471,6 +510,19 @@ func (c *Collection) commit(changes map[string]*plumbing.Hash, message, requeste
 		return err
 	}
 
+	// Durable before visible: the new objects reach flash before the
+	// branch points at them.
+	changed := []plumbing.Hash{treeHash, commitHash}
+	for _, h := range changes {
+		if h != nil {
+			changed = append(changed, *h)
+		}
+	}
+
+	if err := c.syncObjects(changed...); err != nil {
+		return err
+	}
+
 	return c.moveHead(headRef, commitHash)
 }
 
@@ -528,7 +580,7 @@ func (c *Collection) moveHead(old *plumbing.Reference, commit plumbing.Hash) err
 
 	c.last = nil
 
-	return nil
+	return c.syncRef(branch)
 }
 
 // writeWorktree keeps the checked-out files and the index in step with

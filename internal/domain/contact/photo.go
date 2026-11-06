@@ -6,6 +6,7 @@ import (
 	"errors"
 	"image"
 	"image/jpeg"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -19,8 +20,96 @@ import (
 	"github.com/1995parham-me/farvardin/internal/domain/vcf"
 )
 
-// ErrNoPhoto is returned when a card has no inline photo.
-var ErrNoPhoto = errors.New("card has no inline photo")
+// Errors about photos.
+var (
+	ErrNoPhoto = errors.New("card has no inline photo")
+	// ErrSlim is returned for the photo bytes of a slim card.
+	ErrSlim = errors.New("photo bytes are not kept on a slim card; parse the stored object")
+	// ErrTooLarge refuses images whose pixel count could exhaust memory.
+	ErrTooLarge = errors.New("image is too large to decode")
+)
+
+// MaxPixels bounds the images farvardin decodes (a JPEG of a few KB can
+// declare 30000x30000 and allocate gigabytes). 16 MP covers any phone
+// contact photo.
+var MaxPixels int64 = 16_000_000
+
+// decodeSlots limits concurrent full image decodes; each can take tens of
+// MB and a slow CPU, so two at a time is plenty on a small board.
+var decodeSlots = make(chan struct{}, 2)
+
+func decodeImage(data []byte) (image.Image, error) {
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return nil, err //nolint:wrapcheck // callers only check for nil
+	}
+
+	if int64(cfg.Width)*int64(cfg.Height) > MaxPixels {
+		return nil, ErrTooLarge
+	}
+
+	decodeSlots <- struct{}{}
+	defer func() { <-decodeSlots }()
+
+	img, _, err := image.Decode(bytes.NewReader(data))
+
+	return img, err //nolint:wrapcheck // callers only check for nil
+}
+
+// PhotoInfo is what a slim card remembers about its photo.
+type PhotoInfo struct {
+	Width     int
+	Height    int
+	Bytes     int
+	MediaType string
+	// Key identifies the photo bytes, so equal photos compare equal.
+	Key string
+}
+
+// Slim returns a copy without the values of binary properties, keeping
+// the photo's size and identity. Cached cards are slim: a 1000-card
+// address book costs ~2 MB instead of ~65 MB.
+func (c Card) Slim() Card {
+	if c.slim != nil {
+		return c
+	}
+
+	info := PhotoInfo{Width: 0, Height: 0, Bytes: 0, MediaType: "", Key: c.PhotoKey()}
+	if p, err := c.Photo(); err == nil {
+		info.Width, info.Height, info.Bytes, info.MediaType = p.Width, p.Height, len(p.Data), p.MediaType
+	}
+
+	out := Card{Lines: make([]vcf.Line, len(c.Lines)), slim: &info}
+
+	for i, l := range c.Lines {
+		l.Params = slices.Clone(l.Params)
+		if slices.Contains(binaryProps, l.Name) {
+			l.DropValue()
+		}
+
+		out.Lines[i] = l
+	}
+
+	return out
+}
+
+// IsSlim reports whether the card's binary values were dropped.
+func (c Card) IsSlim() bool { return c.slim != nil }
+
+// PhotoInfo returns the photo's size and identity, from a full or a slim
+// card.
+func (c Card) PhotoInfo() (PhotoInfo, bool) {
+	if c.slim != nil {
+		return *c.slim, c.slim.Key != ""
+	}
+
+	p, err := c.Photo()
+	if err != nil {
+		return PhotoInfo{}, false
+	}
+
+	return PhotoInfo{Width: p.Width, Height: p.Height, Bytes: len(p.Data), MediaType: p.MediaType, Key: c.PhotoKey()}, true
+}
 
 // Photo is an inline photo decoded from a card.
 type Photo struct {
@@ -61,6 +150,10 @@ const (
 
 // Photo decodes the first inline PHOTO of the card.
 func (c Card) Photo() (Photo, error) {
+	if c.slim != nil {
+		return Photo{}, ErrSlim
+	}
+
 	l, ok := c.Get("PHOTO")
 	if !ok {
 		return Photo{}, ErrNoPhoto
@@ -120,7 +213,7 @@ func ApplyPhotoPolicy(incoming Card, stored *Card, policy PhotoPolicy) (Card, Ph
 	}
 
 	in, err := decodePhotoLine(incoming.Lines[idx])
-	if err != nil || in.Width == 0 {
+	if err != nil || in.Width == 0 || int64(in.Width)*int64(in.Height) > MaxPixels {
 		return incoming, PhotoUnchanged
 	}
 
@@ -234,9 +327,9 @@ func samePicture(a, b Photo) bool {
 const fingerprintSize = 16
 
 func fingerprint(data []byte) ([]uint8, error) {
-	img, _, err := image.Decode(bytes.NewReader(data))
+	img, err := decodeImage(data)
 	if err != nil {
-		return nil, err //nolint:wrapcheck // caller only checks for nil
+		return nil, err
 	}
 
 	small := image.NewGray(image.Rect(0, 0, fingerprintSize, fingerprintSize))
@@ -246,9 +339,9 @@ func fingerprint(data []byte) ([]uint8, error) {
 }
 
 func scale(p Photo, maxSize, quality int) ([]byte, error) {
-	img, _, err := image.Decode(bytes.NewReader(p.Data))
+	img, err := decodeImage(p.Data)
 	if err != nil {
-		return nil, err //nolint:wrapcheck // caller only checks for nil
+		return nil, err
 	}
 
 	w, h := p.Width, p.Height
@@ -259,7 +352,15 @@ func scale(p Photo, maxSize, quality int) ([]byte, error) {
 	}
 
 	dst := image.NewRGBA(image.Rect(0, 0, max(w, 1), max(h, 1)))
-	draw.CatmullRom.Scale(dst, dst.Bounds(), img, img.Bounds(), draw.Over, nil)
+
+	// CatmullRom for stored photos; the cheaper bilinear filter for small
+	// thumbnails, where the difference does not show and a slow CPU does.
+	var scaler draw.Scaler = draw.CatmullRom
+	if maxSize <= 256 {
+		scaler = draw.BiLinear
+	}
+
+	scaler.Scale(dst, dst.Bounds(), img, img.Bounds(), draw.Over, nil)
 
 	if quality <= 0 {
 		quality = 85

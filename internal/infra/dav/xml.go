@@ -139,16 +139,7 @@ func (e *elem) write(w *bufio.Writer, root bool) {
 	w.WriteString(e.name.Local)
 
 	if root {
-		keys := make([]string, 0, len(prefixes))
-		for ns := range prefixes {
-			keys = append(keys, ns)
-		}
-
-		sort.Strings(keys)
-
-		for _, ns := range keys {
-			fmt.Fprintf(w, ` xmlns:%s="%s"`, prefixes[ns], ns)
-		}
+		writeNamespaces(w)
 	}
 
 	if e.name.Space != "" && !known {
@@ -279,18 +270,59 @@ func (r *response) elem() *elem {
 	return e
 }
 
-// writeMultistatus streams a 207 response. extra elements (such as the
-// sync-token of a sync report) follow the responses.
-func writeMultistatus(w http.ResponseWriter, responses []*response, extra ...*elem) {
-	root := el(NSDAV, "multistatus")
+// multistatus streams a 207 response: each <response> is written as soon
+// as it is built, so a report over a thousand cards holds one card in
+// memory at a time instead of all of them.
+type multistatus struct {
+	bw *bufio.Writer
+}
 
-	for _, r := range responses {
-		root.children = append(root.children, r.elem())
+func startMultistatus(w http.ResponseWriter) *multistatus {
+	w.Header().Set("Content-Type", "application/xml; charset=utf-8")
+	w.WriteHeader(http.StatusMultiStatus)
+
+	bw := bufio.NewWriterSize(w, 32*1024)
+	bw.WriteString(`<?xml version="1.0" encoding="utf-8"?>` + "\n<d:multistatus")
+	writeNamespaces(bw)
+	bw.WriteByte('>')
+
+	return &multistatus{bw: bw}
+}
+
+func (m *multistatus) add(r *response) { r.elem().write(m.bw, false) }
+
+// close writes the trailing elements (a sync report's sync-token) and ends
+// the document.
+func (m *multistatus) close(extra ...*elem) {
+	for _, e := range extra {
+		e.write(m.bw, false)
 	}
 
-	root.children = append(root.children, extra...)
+	m.bw.WriteString("</d:multistatus>")
+	_ = m.bw.Flush()
+}
 
-	writeXML(w, http.StatusMultiStatus, root)
+func writeNamespaces(w *bufio.Writer) {
+	keys := make([]string, 0, len(prefixes))
+	for ns := range prefixes {
+		keys = append(keys, ns)
+	}
+
+	sort.Strings(keys)
+
+	for _, ns := range keys {
+		fmt.Fprintf(w, ` xmlns:%s="%s"`, prefixes[ns], ns)
+	}
+}
+
+// writeMultistatus sends a 207 response built in one go.
+func writeMultistatus(w http.ResponseWriter, responses []*response, extra ...*elem) {
+	ms := startMultistatus(w)
+	for _, r := range responses {
+		ms.add(r)
+	}
+
+	ms.close(extra...)
 }
 
 // writeError sends a DAV:error body naming the failed precondition.

@@ -51,7 +51,9 @@ func (h *Handler) WriteCard(book, name string, data []byte, ifMatch, requester s
 	}
 
 	etag, _, err := col.Put(name, data, store.Condition{IfMatch: ifMatch, IfNoneMatch: false}, requester)
-	if err != nil {
+	if errors.Is(err, store.ErrWorktree) {
+		h.log.Warn("write committed; worktree not refreshed", "object", name, "error", err)
+	} else if err != nil {
 		return "", fmt.Errorf("storing %s: %w", name, err)
 	}
 

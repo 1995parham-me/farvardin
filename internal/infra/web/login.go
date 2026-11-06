@@ -46,6 +46,13 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 
 	r.Body = http.MaxBytesReader(w, r.Body, 8<<10)
 
+	// Login CSRF: a browser posting from another site sends its Origin.
+	if r.Header.Get("Origin") != "" && !sameOrigin(r) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+
+		return
+	}
+
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, "bad form", http.StatusBadRequest)
 
@@ -74,6 +81,7 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
 	if h.sessions != nil {
+		h.sessions.Revoke(r)
 		h.sessions.ClearCookie(w)
 	}
 

@@ -98,7 +98,17 @@ type Service struct {
 	client   *http.Client
 
 	mu sync.Mutex // guards every subscription file
+
+	pmu     sync.Mutex
+	pending map[string]*Change // collection dir -> coalesced change
 }
+
+// coalesce is how long changes to one collection are gathered into one
+// message: an import of a thousand cards sends one push, not a thousand.
+const coalesce = time.Second
+
+// sendSlots bounds concurrent deliveries for one message.
+const sendSlots = 4
 
 // New returns a service that signs with keys and keeps its index in
 // stateDir.
@@ -106,7 +116,7 @@ func New(keys *Keys, stateDir string, log *slog.Logger) *Service {
 	//nolint:exhaustruct // a client with a timeout is all that is needed
 	client := &http.Client{Timeout: 20 * time.Second}
 
-	return &Service{keys: keys, stateDir: stateDir, log: log, client: client, mu: sync.Mutex{}}
+	return &Service{keys: keys, stateDir: stateDir, log: log, client: client, mu: sync.Mutex{}, pmu: sync.Mutex{}, pending: map[string]*Change{}}
 }
 
 // PublicKey is the VAPID public key for the transports property.
@@ -347,14 +357,60 @@ type Change struct {
 }
 
 // Notify sends a push message to every subscriber of the collection in
-// dir that asked for this kind of change. It runs in the background and
-// never fails the request that caused it.
+// dir that asked for this kind of change. Changes within a second are
+// merged into one message. It runs in the background and never fails the
+// request that caused it.
 func (s *Service) Notify(dir string, c Change) {
 	if c.SkipAll {
 		return
 	}
 
-	go s.notify(dir, c)
+	s.pmu.Lock()
+	defer s.pmu.Unlock()
+
+	if p, ok := s.pending[dir]; ok {
+		merge(p, c)
+
+		return
+	}
+
+	merged := c
+	s.pending[dir] = &merged
+
+	time.AfterFunc(coalesce, func() {
+		s.pmu.Lock()
+		p := s.pending[dir]
+		delete(s.pending, dir)
+		s.pmu.Unlock()
+
+		if p != nil {
+			s.notify(dir, *p)
+		}
+	})
+}
+
+// merge folds a newer change into a pending one: the newest sync token,
+// every changed property, and only the subscriptions every write skipped.
+func merge(p *Change, c Change) {
+	if c.SyncToken != "" {
+		p.SyncToken = c.SyncToken
+	}
+
+	for _, prop := range c.Properties {
+		if !slices.Contains(p.Properties, prop) {
+			p.Properties = append(p.Properties, prop)
+		}
+	}
+
+	kept := map[string]bool{}
+
+	for id := range p.Skip {
+		if c.Skip[id] {
+			kept[id] = true
+		}
+	}
+
+	p.Skip = kept
 }
 
 func (s *Service) notify(dir string, c Change) {
@@ -374,8 +430,9 @@ func (s *Service) notify(dir string, c Change) {
 	payload := Message(topic, c)
 	now := time.Now()
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-	defer cancel()
+	var wg sync.WaitGroup
+
+	slots := make(chan struct{}, sendSlots)
 
 	for id, sub := range f.Subscriptions {
 		if exp := sub.ExpiresAt(); !exp.IsZero() && !exp.After(now) {
@@ -389,22 +446,39 @@ func (s *Service) notify(dir string, c Change) {
 			continue
 		}
 
-		status, err := s.keys.send(ctx, s.client, sub, payload, topic)
-		if err != nil {
-			s.log.Warn("push: delivery failed", "id", id, "error", err)
+		slots <- struct{}{}
 
-			continue
-		}
+		wg.Go(func() {
+			defer func() { <-slots }()
 
-		switch {
-		case status == http.StatusNotFound || status == http.StatusGone:
-			s.log.Info("push: the push service dropped the subscription; removing it", "id", id, "status", status)
-			_ = s.Remove(dir, id)
-		case status >= 300:
-			s.log.Warn("push: push service refused the message", "id", id, "status", status)
-		default:
-			s.log.Debug("push: delivered", "id", id, "status", status)
-		}
+			s.deliver(dir, id, sub, payload, topic)
+		})
+	}
+
+	wg.Wait()
+}
+
+// deliver sends one message with its own timeout, so a dead push service
+// cannot hold up the other subscribers.
+func (s *Service) deliver(dir, id string, sub Subscription, payload []byte, topic string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	status, err := s.keys.send(ctx, s.client, sub, payload, topic)
+	if err != nil {
+		s.log.Warn("push: delivery failed", "id", id, "error", err)
+
+		return
+	}
+
+	switch {
+	case status == http.StatusNotFound || status == http.StatusGone:
+		s.log.Info("push: the push service dropped the subscription; removing it", "id", id, "status", status)
+		_ = s.Remove(dir, id)
+	case status >= 300:
+		s.log.Warn("push: push service refused the message", "id", id, "status", status)
+	default:
+		s.log.Debug("push: delivered", "id", id, "status", status)
 	}
 }
 

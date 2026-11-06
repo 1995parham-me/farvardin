@@ -49,12 +49,18 @@ type Options struct {
 	Sessions *Sessions
 	// Writer enables the actions that change a card (photo restore).
 	Writer CardWriter
+	// Full parses an object with its photo bytes (the Parser returns slim
+	// cards); thumbnails and restore need it.
+	Full Parser
+	// ThumbnailCacheBytes bounds the scaled-photo cache.
+	ThumbnailCacheBytes int
 }
 
 // Handler is the UI http.Handler, mounted at Prefix.
 type Handler struct {
 	store     *store.Store
 	parse     Parser
+	full      Parser
 	birthdays BirthdaySource
 	write     CardWriter
 	prefix    string
@@ -70,10 +76,10 @@ type Handler struct {
 // New builds the UI.
 func New(s *store.Store, parse Parser, birthdays BirthdaySource, opts Options, log *slog.Logger) (*Handler, error) {
 	h := &Handler{
-		store: s, parse: parse, birthdays: birthdays, write: opts.Writer,
+		store: s, parse: parse, full: opts.Full, birthdays: birthdays, write: opts.Writer,
 		prefix: strings.TrimSuffix(opts.Prefix, "/"), davPrefix: strings.TrimSuffix(opts.DAVPrefix, "/"),
 		sessions: opts.Sessions, log: log, tmpl: nil, mux: http.NewServeMux(),
-		thumbs: newThumbCache(64 << 20), lists: newListCache(),
+		thumbs: newThumbCache(opts.ThumbnailCacheBytes), lists: newListCache(),
 	}
 
 	funcs := template.FuncMap{
@@ -242,7 +248,7 @@ func (h *Handler) people(book *store.Collection) ([]person, *store.Snapshot, err
 			p.Phone = t[0].Value
 		}
 
-		if ph, err := card.Photo(); err == nil {
+		if ph, ok := card.PhotoInfo(); ok {
 			p.HasPhoto = true
 			p.PhotoW = max(ph.Width, ph.Height)
 			p.LowRes = p.PhotoW > 0 && p.PhotoW <= thumbSize
@@ -390,8 +396,8 @@ func (h *Handler) contactPage(w http.ResponseWriter, r *http.Request) {
 	revs, _ := book.History(name, 25)
 
 	photoInfo := ""
-	if p, err := card.Photo(); err == nil {
-		photoInfo = fmt.Sprintf("%d×%d · %d KiB", p.Width, p.Height, len(p.Data)/1024)
+	if p, ok := card.PhotoInfo(); ok {
+		photoInfo = fmt.Sprintf("%d×%d · %d KiB", p.Width, p.Height, p.Bytes/1024)
 	}
 
 	_, hasPhoto := card.Get("PHOTO")

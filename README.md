@@ -40,6 +40,18 @@ The name: Xandikos is named after a spring month of the ancient Macedonian calen
 - **Authentication**: none (behind a proxy), bcrypt basic auth, or a trusted proxy header.
 - One static binary; commits go straight into the git object database, so a write costs the same with ten contacts or ten thousand.
 
+## Small devices
+
+farvardin is built for boards like a Raspberry Pi: one static binary (16-20 MiB) for linux on amd64, arm64, armv6, armv7, riscv64 and mipsle, plus `.deb`, `.rpm`, `.apk`, Arch and OpenWrt `.ipk` packages and multi-arch container images. Memory is bounded everywhere:
+
+- cached cards are slim (their photo bytes are dropped, size and identity kept);
+- go-git's object cache is 8 MiB per collection instead of its 96 MiB default;
+- reports are streamed one response at a time, so a sync never holds the address book in memory;
+- images are decoded two at a time and never above `max_image_pixels`;
+- push messages are coalesced per collection and sent four at a time.
+
+Measured on a 988-card, 32 MB address book, a full first sync peaks at about 167 MiB with the defaults and about 87 MiB with the small-board values in [`configs/config.example.toml`](configs/config.example.toml). Writes fsync new objects before the branch moves, so a power cut on an SD card can lose the last write but never corrupt the store.
+
 ## Quick start
 
 ```bash

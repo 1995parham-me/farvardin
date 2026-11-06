@@ -5,15 +5,14 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-User=farvardin
-Group=farvardin
+# systemd creates the user; packages need no install script.
+DynamicUser=yes
 ExecStart=/usr/bin/farvardin serve --config /etc/farvardin/config.toml
 Restart=on-failure
 RestartSec=5
 
-# farvardin only needs its store.
+# farvardin only needs its store, /var/lib/farvardin.
 StateDirectory=farvardin
-ReadWritePaths=/var/lib/farvardin
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
@@ -27,6 +26,9 @@ RestrictNamespaces=true
 LockPersonality=true
 MemoryDenyWriteExecute=true
 SystemCallArchitectures=native
+# Small boards: keep the Go heap under the cgroup limit (see the README).
+Environment=GOMEMLIMIT=200MiB
+MemoryMax=256M
 
 [Install]
 WantedBy=multi-user.target

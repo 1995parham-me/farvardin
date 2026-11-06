@@ -1,3 +1,6 @@
+# GoReleaser: binaries, packages and container images for every release
+# tag (v*). Built for small devices first: static (CGO off), stripped,
+# and for the ARM, RISC-V and MIPS boards farvardin is meant to run on.
 version: 2
 
 project_name: farvardin
@@ -12,20 +15,39 @@ builds:
     binary: farvardin
     env:
       - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
     goos:
       - linux
       - darwin
+      - freebsd
     goarch:
       - amd64
       - arm64
-    ldflags:
-      - -s -w
+      - arm
+      - riscv64
+      - mipsle
+    goarm:
+      - "6"
+      - "7"
+    gomips:
+      - softfloat
+    ignore:
+      - { goos: darwin, goarch: arm }
+      - { goos: darwin, goarch: riscv64 }
+      - { goos: darwin, goarch: mipsle }
+      - { goos: freebsd, goarch: arm }
+      - { goos: freebsd, goarch: riscv64 }
+      - { goos: freebsd, goarch: mipsle }
 
 archives:
   - id: default
     formats:
       - tar.gz
-    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}{{ if .Arm }}v{{ .Arm }}{{ end }}{{ if .Mips }}_{{ .Mips }}{{ end }}
     files:
       - README.md
       - LICENSE
@@ -47,17 +69,22 @@ changelog:
 nfpms:
   - id: packages
     package_name: farvardin
+    file_name_template: >-
+      {{ .PackageName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}{{ if .Arm }}v{{ .Arm }}{{ end }}{{ if .Mips }}_{{ .Mips }}{{ end }}
     vendor: 1995parham-me
     homepage: https://github.com/1995parham-me/farvardin
     maintainer: Parham Alvani <parham.alvani@gmail.com>
     description: |-
       CardDAV and CalDAV server that keeps contacts and calendars in git,
-      compatible with the Xandikos store layout, with a read-only web UI.
+      compatible with the Xandikos store layout, with WebDAV-Push and a web UI.
     section: net
     license: Apache-2.0
     formats:
       - deb
       - rpm
+      - apk
+      - archlinux
+      - ipk
     bindir: /usr/bin
     contents:
       - src: configs/config.example.toml
@@ -68,38 +95,53 @@ nfpms:
 
 dockers:
   - id: farvardin-amd64
+    goos: linux
+    goarch: amd64
     image_templates:
       - "ghcr.io/1995parham-me/farvardin:{{ .Version }}-amd64"
       - "ghcr.io/1995parham-me/farvardin:latest-amd64"
     use: buildx
-    goos: linux
-    goarch: amd64
     dockerfile: build/package/Dockerfile
     build_flag_templates:
       - "--platform=linux/amd64"
       - "--label=org.opencontainers.image.source=https://github.com/1995parham-me/farvardin"
-      - "--label=org.opencontainers.image.title={{.ProjectName}}"
+      - "--label=org.opencontainers.image.title={{ .ProjectName }}"
       - "--label=org.opencontainers.image.description=CardDAV and CalDAV server backed by git"
-      - "--label=org.opencontainers.image.version={{.Version}}"
-      - "--label=org.opencontainers.image.revision={{.FullCommit}}"
+      - "--label=org.opencontainers.image.version={{ .Version }}"
+      - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
       - "--label=org.opencontainers.image.licenses=Apache-2.0"
     extra_files:
       - configs/config.example.toml
   - id: farvardin-arm64
+    goos: linux
+    goarch: arm64
     image_templates:
       - "ghcr.io/1995parham-me/farvardin:{{ .Version }}-arm64"
       - "ghcr.io/1995parham-me/farvardin:latest-arm64"
     use: buildx
-    goos: linux
-    goarch: arm64
     dockerfile: build/package/Dockerfile
     build_flag_templates:
       - "--platform=linux/arm64"
       - "--label=org.opencontainers.image.source=https://github.com/1995parham-me/farvardin"
-      - "--label=org.opencontainers.image.title={{.ProjectName}}"
-      - "--label=org.opencontainers.image.description=CardDAV and CalDAV server backed by git"
-      - "--label=org.opencontainers.image.version={{.Version}}"
-      - "--label=org.opencontainers.image.revision={{.FullCommit}}"
+      - "--label=org.opencontainers.image.version={{ .Version }}"
+      - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
+      - "--label=org.opencontainers.image.licenses=Apache-2.0"
+    extra_files:
+      - configs/config.example.toml
+  - id: farvardin-armv7
+    goos: linux
+    goarch: arm
+    goarm: "7"
+    image_templates:
+      - "ghcr.io/1995parham-me/farvardin:{{ .Version }}-armv7"
+      - "ghcr.io/1995parham-me/farvardin:latest-armv7"
+    use: buildx
+    dockerfile: build/package/Dockerfile
+    build_flag_templates:
+      - "--platform=linux/arm/v7"
+      - "--label=org.opencontainers.image.source=https://github.com/1995parham-me/farvardin"
+      - "--label=org.opencontainers.image.version={{ .Version }}"
+      - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
       - "--label=org.opencontainers.image.licenses=Apache-2.0"
     extra_files:
       - configs/config.example.toml
@@ -109,10 +151,12 @@ docker_manifests:
     image_templates:
       - "ghcr.io/1995parham-me/farvardin:{{ .Version }}-amd64"
       - "ghcr.io/1995parham-me/farvardin:{{ .Version }}-arm64"
+      - "ghcr.io/1995parham-me/farvardin:{{ .Version }}-armv7"
   - name_template: "ghcr.io/1995parham-me/farvardin:latest"
     image_templates:
       - "ghcr.io/1995parham-me/farvardin:latest-amd64"
       - "ghcr.io/1995parham-me/farvardin:latest-arm64"
+      - "ghcr.io/1995parham-me/farvardin:latest-armv7"
 
 release:
   github:
@@ -120,4 +164,4 @@ release:
     name: farvardin
   draft: false
   prerelease: auto
-  name_template: "v{{.Version}}"
+  name_template: "v{{ .Version }}"
