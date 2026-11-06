@@ -44,7 +44,7 @@ Your phones sync contacts and calendars over CardDAV and CalDAV, and the server 
 - **JSContact** ([RFC 9553](https://www.rfc-editor.org/rfc/rfc9553)) on request
 - **Photo guard**: thumbnails never replace a full photo; re-encodes keep the stored bytes; oversized photos are scaled once
 - Byte-exact storage: lines nobody edited keep their bytes
-- **Phone numbers**: with `phone_region` set, lint suggests the E.164 form of numbers without a country code and fixes them on request; search finds a number however it is written
+- **Phone numbers**: with `phone_region` set to one country or a list (`["IR", "ES"]`), lint suggests the E.164 form of numbers without a country code and fixes them on request; search finds a number however it is written
 
 </td>
 <td width="33%" valign="top">
@@ -249,7 +249,7 @@ Each write is a commit (`Added`, `Modified` or `Deleted <file>`, with the client
 
 ```text
 farvardin serve            run the server (--listen and --root override the config)
-farvardin lint DIR|FILE    check vCards; exits 1 when a card has errors (-w for warnings, -r IR to read national phone numbers)
+farvardin lint DIR|FILE    check vCards; exits 1 when a card has errors (-w for warnings, -r IR,ES to read national phone numbers)
 farvardin convert FILE     convert vCards: --to 3.0 | 4.0 | jscontact
 farvardin hash-password    bcrypt hash for [auth.users] / [ui.users]
 farvardin mcp-token NAME   bearer token for [mcp.tokens]

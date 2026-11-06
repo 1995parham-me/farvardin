@@ -244,7 +244,7 @@ func TestPhoneTools(t *testing.T) {
 		t.Fatalf("fix without region: %v %s", isErr, msg)
 	}
 
-	b.PhoneRegion = "IR"
+	b.PhoneRegion = []string{"IR"}
 	cs = connect(t, b)
 
 	lint, _, _ := call[LintOut](t, cs, "lint_contacts", map[string]any{"warnings": true})

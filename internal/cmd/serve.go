@@ -170,7 +170,7 @@ func serve(ctx context.Context, cmd *cli.Command) error {
 	}
 }
 
-func mountMCP(mux *http.ServeMux, cfg config.MCP, region string, s *store.Store, d *dav.Handler, log *slog.Logger) {
+func mountMCP(mux *http.ServeMux, cfg config.MCP, region []string, s *store.Store, d *dav.Handler, log *slog.Logger) {
 	mux.Handle("/mcp", mcpserver.Handler(mcpserver.Backend{
 		Store: s, Parse: d.Cache(), Full: d.Full(),
 		WriteCard: d.WriteCard, WriteEvent: d.WriteEvent, Delete: d.DeleteObject,

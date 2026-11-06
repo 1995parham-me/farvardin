@@ -45,10 +45,15 @@ photo_stabilize = true
 # The longest side that counts as a thumbnail for photo_guard.
 thumbnail_size = 128
 photo_quality = 85
-# The country (ISO 3166-1, like "IR" or "DE") of phone numbers written
-# without a country code. Lint then suggests the international (E.164)
-# form, and the web UI and MCP can fix them. Nothing changes a card unless
-# you ask. "" checks only numbers that have a country code.
+# The countries (ISO 3166-1, like "IR" or "ES") phone numbers written
+# without a country code can belong to: "IR", or ["IR", "ES"] for an
+# address book with both. A number is read in the one country where it is
+# valid; it is left alone when it is valid in more than one, or when it
+# begins with the calling code of another listed country ("982 000 256" is
+# an Iranian sender saved without its "+", not a landline in Lugo). Lint
+# then suggests the international (E.164) form, and the web UI and MCP can
+# fix it. Nothing changes a card unless you ask. "" checks only numbers
+# that have a country code.
 phone_region = ""
 
 [calendars]

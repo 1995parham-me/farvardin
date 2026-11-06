@@ -133,10 +133,12 @@ type Contacts struct {
 	PhotoStabilize  bool  `json:"photo_stabilize"   koanf:"photo_stabilize"`
 	ThumbnailSize   int   `json:"thumbnail_size"    koanf:"thumbnail_size"`
 	PhotoQuality    int   `json:"photo_quality"     koanf:"photo_quality"`
-	// PhoneRegion is the country (ISO 3166-1, "IR") of phone numbers
-	// written without a country code. Lint suggests their E.164 form and
-	// the UI and MCP can fix them; "" checks only international numbers.
-	PhoneRegion string `json:"phone_region" koanf:"phone_region"`
+	// PhoneRegion lists the countries (ISO 3166-1, "IR", "ES") a phone
+	// number written without a country code can belong to: a number is
+	// read in the one of them where it is valid. Lint suggests the E.164
+	// form and the UI and MCP can fix it; empty checks only international
+	// numbers. A single string ("IR") is a list of one.
+	PhoneRegion []string `json:"phone_region" koanf:"phone_region"`
 }
 
 // Calendars holds the calendar behaviour.
@@ -161,7 +163,7 @@ func Default() Config {
 		Auth:   Auth{Mode: "none", Realm: "farvardin", Header: "X-Remote-User", Users: nil},
 		Contacts: Contacts{
 			MaxResourceSize: 10 << 20, PhotoMaxSize: 720, PhotoGuard: true, PhotoStabilize: true,
-			ThumbnailSize: 128, PhotoQuality: 85, PhoneRegion: "",
+			ThumbnailSize: 128, PhotoQuality: 85, PhoneRegion: nil,
 		},
 		Calendars: Calendars{Birthdays: true, BirthdayAlarmDays: 0, BirthdayColor: "#FF2D55", UserAddress: ""},
 		Push:      Push{Enabled: false, StateDir: "/var/lib/farvardin/state", Subject: "mailto:farvardin@localhost"},
@@ -211,6 +213,8 @@ func Load(path string) (Config, error) {
 		return Config{}, fmt.Errorf("decoding configuration: %w", err)
 	}
 
+	cfg.Contacts.PhoneRegion = splitList(cfg.Contacts.PhoneRegion)
+
 	return cfg, cfg.Validate()
 }
 
@@ -244,8 +248,10 @@ func (c Config) Validate() error {
 		return fmt.Errorf("%w: ui.auth must be proxy or jwt, not %q", ErrInvalid, c.UI.Auth)
 	}
 
-	if c.Contacts.PhoneRegion != "" && !contact.ValidRegion(c.Contacts.PhoneRegion) {
-		return fmt.Errorf("%w: contacts.phone_region %q is not a known country code (ISO 3166-1, like \"IR\")", ErrInvalid, c.Contacts.PhoneRegion)
+	for _, r := range c.Contacts.PhoneRegion {
+		if !contact.ValidRegion(r) {
+			return fmt.Errorf("%w: contacts.phone_region %q is not a known country code (ISO 3166-1, like \"IR\")", ErrInvalid, r)
+		}
 	}
 
 	if c.Store.Root == "" {
@@ -253,4 +259,20 @@ func (c Config) Validate() error {
 	}
 
 	return nil
+}
+
+// splitList reads a list that may come as one string: "IR,ES" from the
+// environment, or "" (the example's default) for none.
+func splitList(in []string) []string {
+	var out []string
+
+	for _, item := range in {
+		for part := range strings.SplitSeq(item, ",") {
+			if part = strings.TrimSpace(part); part != "" {
+				out = append(out, part)
+			}
+		}
+	}
+
+	return out
 }

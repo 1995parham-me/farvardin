@@ -51,10 +51,10 @@ func card(photo string) string {
 func setup(t *testing.T) (*httptest.Server, *http.Client, *store.Collection) {
 	t.Helper()
 
-	return setupRegion(t, "")
+	return setupRegion(t)
 }
 
-func setupRegion(t *testing.T, region string) (*httptest.Server, *http.Client, *store.Collection) {
+func setupRegion(t *testing.T, region ...string) (*httptest.Server, *http.Client, *store.Collection) {
 	t.Helper()
 
 	root := t.TempDir()

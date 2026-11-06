@@ -33,12 +33,14 @@ func lintCommand() *cli.Command {
 			//nolint:exhaustruct // flag literal
 			&cli.BoolFlag{Name: "warnings", Aliases: []string{"w"}, Usage: "also print warnings"},
 			//nolint:exhaustruct // flag literal
-			&cli.StringFlag{Name: "region", Aliases: []string{"r"}, Usage: "country (ISO 3166-1, like IR) of phone numbers without a country code; warnings then suggest their E.164 form"},
+			&cli.StringSliceFlag{Name: "region", Aliases: []string{"r"}, Usage: "country (ISO 3166-1, like IR) phone numbers without a country code can belong to, repeated or comma-separated (-r IR,ES); warnings then suggest their E.164 form"},
 		},
 		Action: func(_ context.Context, cmd *cli.Command) error {
-			region := cmd.String("region")
-			if region != "" && !contact.ValidRegion(region) {
-				return fmt.Errorf("lint: %w: %q", errUnknownRegion, region)
+			region := cmd.StringSlice("region")
+			for _, r := range region {
+				if !contact.ValidRegion(r) {
+					return fmt.Errorf("lint: %w: %q", errUnknownRegion, r)
+				}
 			}
 
 			var files []string

@@ -1,6 +1,7 @@
 package contact
 
 import (
+	"strconv"
 	"strings"
 	"unicode"
 
@@ -9,10 +10,11 @@ import (
 	"github.com/1995parham-me/farvardin/internal/domain/vcf"
 )
 
-// Phone numbers are read against a default region (an ISO 3166-1 code
-// such as "IR"): it is the country of a number written without a country
-// code, as in "0912 345 6789". With no region, only numbers that carry a
-// country code ("+98 ...", "0098 ...") can be read.
+// Phone numbers are read against a list of regions (ISO 3166-1 codes
+// such as "IR" and "ES"): the countries a number written without a country
+// code, as in "0912 345 6789" or "612 345 678", can belong to. With no
+// region, only numbers that carry a country code ("+98 ...", "0098 ...")
+// can be read.
 
 // ValidRegion reports whether region is a country code the phone number
 // metadata knows.
@@ -63,33 +65,83 @@ func serviceNumber(s string) bool {
 	return n < 6
 }
 
-// readTel parses a number. It returns nil when the number cannot be read.
-func readTel(value, region string) *phonenumbers.PhoneNumber {
+// readTel parses a number and returns it only when it is a valid one, or
+// nil. A number with a country code needs no region. A number without one
+// is read in the one region of regions where it is valid; it is not read
+// when it is valid in more than one, or when its digits begin with the
+// calling code of a listed region other than the one it is valid in: with
+// "IR" and "ES", "982 000 256" is an Iranian SMS sender saved without its
+// "+", not a landline in Lugo.
+func readTel(value string, regions []string) *phonenumbers.PhoneNumber {
 	v, _ := stripScheme(value)
-	if region == "" && strings.HasPrefix(v, "00") {
-		v = "+" + v[2:]
+
+	if hasCountryCode(v) {
+		v = strings.TrimLeft(v, " (")
+		if strings.HasPrefix(v, "00") {
+			v = "+" + v[2:]
+		}
+
+		num, err := phonenumbers.Parse(v, "")
+		if err != nil || !phonenumbers.IsValidNumber(num) {
+			return nil
+		}
+
+		return num
 	}
 
-	num, err := phonenumbers.Parse(v, strings.ToUpper(region))
-	if err != nil {
+	var (
+		found  *phonenumbers.PhoneNumber
+		region string
+	)
+
+	for _, r := range regions {
+		r = strings.ToUpper(r)
+
+		num, err := phonenumbers.Parse(v, r)
+		if err != nil || !phonenumbers.IsValidNumber(num) {
+			continue
+		}
+
+		if found != nil && found.GetCountryCode() != num.GetCountryCode() {
+			return nil
+		}
+
+		found, region = num, r
+	}
+
+	if found == nil {
 		return nil
 	}
 
-	return num
+	digits := phonenumbers.NormalizeDigitsOnly(v)
+
+	for _, r := range regions {
+		r = strings.ToUpper(r)
+		if r == region {
+			continue
+		}
+
+		code := strconv.Itoa(phonenumbers.GetCountryCodeForRegion(r))
+		if code != "0" && strings.HasPrefix(digits, code) && int(found.GetCountryCode()) != phonenumbers.GetCountryCodeForRegion(r) {
+			return nil
+		}
+	}
+
+	return found
 }
 
 // NormalizeTel returns the E.164 form of a phone number ("+989123456789"),
-// reading a number without a country code in region. ok is false for a
+// reading a number without a country code in regions. ok is false for a
 // number that is not valid, a number with an extension (E.164 has no place
 // for it) and service numbers.
-func NormalizeTel(value, region string) (string, bool) {
+func NormalizeTel(value string, regions []string) (string, bool) {
 	value, _ = stripScheme(value)
 	if serviceNumber(value) {
 		return "", false
 	}
 
-	num := readTel(value, region)
-	if num == nil || num.GetExtension() != "" || !phonenumbers.IsValidNumber(num) {
+	num := readTel(value, regions)
+	if num == nil || num.GetExtension() != "" {
 		return "", false
 	}
 
@@ -100,10 +152,10 @@ func NormalizeTel(value, region string) (string, bool) {
 // match: the digits as written, the E.164 digits, and the national form
 // ("09123456789"). A search for any of them finds the number whichever
 // way it was written.
-func PhoneKeys(value, region string) []string {
+func PhoneKeys(value string, regions []string) []string {
 	keys := []string{phonenumbers.NormalizeDigitsOnly(value)}
 
-	if num := readTel(value, region); num != nil && phonenumbers.IsValidNumber(num) {
+	if num := readTel(value, regions); num != nil {
 		keys = append(keys,
 			strings.TrimPrefix(phonenumbers.Format(num, phonenumbers.E164), "+"),
 			phonenumbers.NormalizeDigitsOnly(phonenumbers.Format(num, phonenumbers.NATIONAL)),
@@ -118,7 +170,7 @@ func PhoneKeys(value, region string) []string {
 // and the same number twice. A number the metadata does not know is not
 // reported: in a real address book those are SMS panel and service
 // senders (+98 1000..., +98 3000...), not typos.
-func LintPhones(c Card, region string) []Issue {
+func LintPhones(c Card, regions []string) []Issue {
 	var issues []Issue
 
 	seen := map[string]string{}
@@ -129,8 +181,8 @@ func LintPhones(c Card, region string) []Issue {
 			continue
 		}
 
-		num := readTel(raw, region)
-		if num == nil || !phonenumbers.IsValidNumber(num) {
+		num := readTel(raw, regions)
+		if num == nil {
 			continue
 		}
 
@@ -161,7 +213,7 @@ type PhoneFix struct {
 // country code written in E.164, the fixes LintPhones suggests. A vCard
 // 4.0 tel: URI keeps its scheme. Types, labels and every other line keep
 // their bytes.
-func FixPhones(c Card, region string) (Card, []PhoneFix) {
+func FixPhones(c Card, regions []string) (Card, []PhoneFix) {
 	out := c.Clone()
 
 	var fixes []PhoneFix
@@ -176,7 +228,7 @@ func FixPhones(c Card, region string) (Card, []PhoneFix) {
 			continue
 		}
 
-		e164, ok := NormalizeTel(raw, region)
+		e164, ok := NormalizeTel(raw, regions)
 		if !ok {
 			continue
 		}
@@ -195,8 +247,8 @@ func FixPhones(c Card, region string) (Card, []PhoneFix) {
 
 // Lint is Validate plus the phone number checks. Validate alone guards
 // writes; Lint is for reports.
-func Lint(c Card, region string) []Issue {
-	return append(Validate(c), LintPhones(c, region)...)
+func Lint(c Card, regions []string) []Issue {
+	return append(Validate(c), LintPhones(c, regions)...)
 }
 
 func quote(s string) string { return `"` + s + `"` }

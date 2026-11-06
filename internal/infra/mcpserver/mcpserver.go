@@ -54,7 +54,7 @@ type Backend struct {
 	// PhoneRegion is the country of numbers written without a country
 	// code: lint suggests their E.164 form, written phones are stored in
 	// it, and search matches either form.
-	PhoneRegion string
+	PhoneRegion []string
 }
 
 // Version is reported to clients.
@@ -366,7 +366,7 @@ func (t tools) load(bookName, id string) (*store.Collection, store.Object, *cont
 	return book, obj, c, nil
 }
 
-func detail(book string, obj store.Object, c contact.Card, region string) ContactDetail {
+func detail(book string, obj store.Object, c contact.Card, region []string) ContactDetail {
 	n := c.Name()
 	d := ContactDetail{
 		ContactSummary: summarize(book, obj.Name, obj.ETag, c),
@@ -448,7 +448,7 @@ func toLabelled(in []Labelled) []contact.Labelled {
 	return out
 }
 
-func apply(c *contact.Card, f ContactFields, region string) error {
+func apply(c *contact.Card, f ContactFields, region []string) error {
 	if f.FullName != nil || f.GivenName != nil || f.FamilyName != nil {
 		c.SetName(deref(f.FullName), deref(f.GivenName), deref(f.FamilyName))
 	}
@@ -771,7 +771,7 @@ type FixPhonesOut struct {
 var errNoRegion = errors.New("contacts.phone_region is not set in the server configuration, so numbers without a country code cannot be read")
 
 func (t tools) fixPhones(_ context.Context, req *mcp.CallToolRequest, in FixPhonesIn) (*mcp.CallToolResult, FixPhonesOut, error) {
-	if t.b.PhoneRegion == "" {
+	if len(t.b.PhoneRegion) == 0 {
 		return nil, FixPhonesOut{}, errNoRegion
 	}
 

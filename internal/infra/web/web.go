@@ -56,7 +56,7 @@ type Options struct {
 	ThumbnailCacheBytes int
 	// PhoneRegion is the country of numbers written without a country
 	// code; lint suggests their E.164 form and the contact page fixes them.
-	PhoneRegion string
+	PhoneRegion []string
 }
 
 // Handler is the UI http.Handler, mounted at Prefix.
@@ -68,7 +68,7 @@ type Handler struct {
 	write     CardWriter
 	prefix    string
 	davPrefix string
-	region    string
+	region    []string
 	sessions  *Sessions
 	log       *slog.Logger
 	tmpl      *template.Template
@@ -425,7 +425,7 @@ func (h *Handler) contactPage(w http.ResponseWriter, r *http.Request) {
 }
 
 // fields lists a card's properties in reading order with labels.
-func fields(c contact.Card, region string) []field {
+func fields(c contact.Card, region []string) []field {
 	var out []field
 
 	label := func(v contact.Value, fallback string) string {
@@ -496,7 +496,7 @@ func fields(c contact.Card, region string) []field {
 // telLink is the tel: URI of a number: E.164 when it can be read, else
 // its digits. html/template refuses tel: in a plain string, so the URI is
 // built from digits only and then marked safe.
-func telLink(v, region string) template.URL {
+func telLink(v string, region []string) template.URL {
 	n, ok := contact.NormalizeTel(v, region)
 	if !ok {
 		n = strings.Map(func(r rune) rune {
