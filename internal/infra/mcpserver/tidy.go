@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -173,7 +172,7 @@ func (t tools) listDeleted(_ context.Context, _ *mcp.CallToolRequest, in BookIn)
 
 	for _, g := range gone {
 		out.Deleted = append(out.Deleted, DeletedContact{
-			ID: g.Name, Name: g.Display, DeletedAt: g.Deleted.When.Format(time.RFC3339), DeletedBy: web.Device(g.Deleted.Requester),
+			ID: g.Name, Name: g.Display, DeletedAt: localTime(g.Deleted.When), DeletedBy: web.Device(g.Deleted.Requester),
 		})
 	}
 

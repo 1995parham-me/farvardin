@@ -650,6 +650,6 @@ func ago(t time.Time) string {
 	case d < 30*24*time.Hour:
 		return strconv.Itoa(int(d.Hours()/24)) + " d ago"
 	default:
-		return t.Format("2 Jan 2006")
+		return t.Local().Format("2 Jan 2006") //nolint:gosmopolitan // a commit's date where the owner is, not where it was written
 	}
 }

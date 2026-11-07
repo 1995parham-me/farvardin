@@ -319,7 +319,7 @@ func (e Editor) FixAllPhones(bookName, requester string) ([]PhoneFixes, error) {
 		return nil, err
 	}
 
-	var out []PhoneFixes
+	out := []PhoneFixes{}
 
 	for _, o := range snap.Objects {
 		slim, _, err := e.Parse(col, o.ETag)

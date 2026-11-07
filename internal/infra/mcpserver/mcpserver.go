@@ -701,7 +701,7 @@ func (t tools) contactHistory(_ context.Context, _ *mcp.CallToolRequest, in Hist
 	out := HistoryOut{Revisions: nil}
 
 	for _, r := range revs {
-		rev := Revision{Revision: r.ETag, When: r.When.Format(time.RFC3339), Device: web.Device(r.Requester), Message: r.Message, Photo: ""}
+		rev := Revision{Revision: r.ETag, When: localTime(r.When), Device: web.Device(r.Requester), Message: r.Message, Photo: ""}
 
 		if r.ETag != "" {
 			if c, _, err := t.b.Parse(book, r.ETag); err == nil && c != nil {
@@ -1355,4 +1355,10 @@ func (t tools) deleteEvent(_ context.Context, req *mcp.CallToolRequest, in Delet
 	}
 
 	return nil, Done{OK: true, Message: "deleted " + title + "; it remains in git history"}, nil
+}
+
+// localTime is a moment in the owner's zone (server.timezone), with the
+// offset: commits keep the zone of the machine that wrote them.
+func localTime(t time.Time) string {
+	return t.Local().Format(time.RFC3339) //nolint:gosmopolitan // times are shown in the owner's zone
 }
