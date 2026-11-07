@@ -66,6 +66,10 @@ func serve(ctx context.Context, cmd *cli.Command) error {
 
 	applyLimits(cfg.Performance)
 
+	if err := setTimezone(cfg.Server.Timezone, log); err != nil {
+		return err
+	}
+
 	s, err := store.OpenWithOptions(cfg.Store.Root, cfg.Store.Principal,
 		store.Author{Name: cfg.Store.AuthorName, Email: cfg.Store.AuthorEmail},
 		store.Options{ObjectCacheBytes: int64(cfg.Performance.ObjectCacheMB) << 20})
@@ -243,7 +247,7 @@ func newUI(cfg config.Config, s *store.Store, d *dav.Handler, log *slog.Logger) 
 		}
 	}
 
-	ui, err := web.New(s, d.Cache(), d.Birthdays, web.Options{Prefix: uiPath, DAVPrefix: cfg.Server.Prefix, Sessions: sessions, Writer: d.WriteCard, Full: d.Full(), ThumbnailCacheBytes: cfg.Performance.ThumbnailCacheMB << 20, PhoneRegion: cfg.Contacts.PhoneRegion}, log)
+	ui, err := web.New(s, d.Cache(), d.Birthdays, web.Options{Prefix: uiPath, DAVPrefix: cfg.Server.Prefix, Sessions: sessions, Writer: d.WriteCard, Full: d.Full(), ThumbnailCacheBytes: cfg.Performance.ThumbnailCacheMB << 20, PhoneRegion: cfg.Contacts.PhoneRegion, Deleter: d.DeleteObject}, log)
 	if err != nil {
 		return nil, fmt.Errorf("ui: %w", err)
 	}
@@ -301,4 +305,22 @@ func logRequests(log *slog.Logger, m *metrics.Metrics, next http.Handler) http.H
 		m.Request(r.Method, rec.status, d)
 		log.Debug("request", "method", r.Method, "path", r.URL.Path, "status", rec.status, "duration", d, "agent", r.UserAgent())
 	})
+}
+
+// setTimezone makes the owner's zone time.Local. Everything that shows or
+// reads a time without a zone (the web UI, MCP, floating iCalendar times,
+// "today") uses time.Local, so it is set once, before anything reads it.
+func setTimezone(name string, log *slog.Logger) error {
+	if name != "" {
+		loc, err := time.LoadLocation(name)
+		if err != nil {
+			return fmt.Errorf("server.timezone: %w", err)
+		}
+
+		time.Local = loc //nolint:gosmopolitan // the configured zone replaces the system's
+	}
+
+	log.Info("time zone", "zone", time.Local.String(), "now", time.Now().Format(time.RFC3339)) //nolint:gosmopolitan // reporting the zone in use
+
+	return nil
 }

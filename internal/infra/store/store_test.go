@@ -135,3 +135,52 @@ func TestMetaRoundTrip(t *testing.T) {
 		t.Fatalf("round trip: %s", m.Encode())
 	}
 }
+
+func TestDeleted(t *testing.T) {
+	t.Parallel()
+
+	s, _ := open(t)
+
+	c, err := s.Collection(store.AddressBook, "addressbook")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	put := func(name, data, ifMatch string) string {
+		t.Helper()
+
+		etag, _, err := c.Put(name, []byte(data), store.Condition{IfMatch: ifMatch, IfNoneMatch: ifMatch == ""}, "test/1.0")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		return etag
+	}
+
+	b1 := strings.Replace(card, "UID:a", "UID:b", 1)
+	b2 := strings.Replace(b1, "FN:A", "FN:B", 1)
+
+	put("a.vcf", card, "")
+	e := put("b.vcf", b1, "")
+	e = put("b.vcf", b2, e)
+
+	if err := c.Delete("b.vcf", store.Condition{IfMatch: e, IfNoneMatch: false}, "test/1.0"); err != nil {
+		t.Fatal(err)
+	}
+
+	gone, err := c.Deleted()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(gone) != 1 || gone[0].Name != "b.vcf" || gone[0].Last != e || gone[0].Deleted.ETag != "" {
+		t.Fatalf("deleted: %+v (last should be %s)", gone, e)
+	}
+
+	// Back under the same name: no longer deleted.
+	put("b.vcf", b2, "")
+
+	if gone, _ := c.Deleted(); len(gone) != 0 {
+		t.Fatalf("after restore: %+v", gone)
+	}
+}

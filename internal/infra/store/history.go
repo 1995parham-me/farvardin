@@ -202,3 +202,61 @@ func (c *Collection) Recent(limit int) ([]Revision, error) {
 
 	return out, nil
 }
+
+// Removed is an object that was deleted and is no longer in the
+// collection.
+type Removed struct {
+	Name string
+	// Deleted is the commit that deleted it.
+	Deleted Revision
+	// Last is the blob id (ETag) it had before the delete.
+	Last string
+}
+
+// Deleted lists the objects deleted from the collection that are not back
+// under the same name, newest delete first, with the last content each
+// had. An object whose content is older than the history kept per object
+// is left out.
+func (c *Collection) Deleted() ([]Removed, error) {
+	if err := c.IndexHistory(); err != nil {
+		return nil, err
+	}
+
+	snap, err := c.Snapshot()
+	if err != nil {
+		return nil, err
+	}
+
+	c.hist.mu.Lock()
+	defer c.hist.mu.Unlock()
+
+	var out []Removed
+
+	for name, revs := range c.hist.byName {
+		if len(revs) == 0 || revs[0].ETag != "" {
+			continue
+		}
+
+		if _, ok := snap.Lookup(name); ok {
+			continue
+		}
+
+		for _, r := range revs[1:] {
+			if r.ETag != "" {
+				out = append(out, Removed{Name: name, Deleted: revs[0], Last: r.ETag})
+
+				break
+			}
+		}
+	}
+
+	sort.Slice(out, func(i, j int) bool {
+		if !out[i].Deleted.When.Equal(out[j].Deleted.When) {
+			return out[i].Deleted.When.After(out[j].Deleted.When)
+		}
+
+		return out[i].Name < out[j].Name
+	})
+
+	return out, nil
+}

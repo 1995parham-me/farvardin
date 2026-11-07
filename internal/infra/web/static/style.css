@@ -73,6 +73,9 @@ footer span { font-family: var(--mono); color: var(--muted); }
 .button:hover { border-color: var(--aqua); color: var(--aqua); }
 .button.primary, button.primary { background: var(--pink); border-color: var(--pink); color: var(--surface); font-weight: 600; }
 .button.primary:hover, button.primary:hover { background: #FF40A0; color: var(--surface); }
+.button.link { padding: 0; border: 0; background: none; color: var(--aqua); }
+.button.link:hover { text-decoration: underline; }
+.hidden-groups { margin-top: 1.2rem; }
 button { font: inherit; }
 .ghost { background: none; border: 0; color: var(--faint); cursor: pointer; padding: .25rem; border-radius: 8px; display: inline-flex; }
 .ghost:hover { color: var(--aqua); background: var(--raised); }
@@ -201,3 +204,10 @@ form.fix { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem .8rem
 .login-form .flash { margin: 0; }
 
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; scroll-behavior: auto !important; } }
+.tabs { margin: -.4rem 0 1rem; }
+.dup { margin: 0 0 1rem; }
+.dup .chips { margin: 0 0 .6rem; }
+.dup form > .button { margin-top: .8rem; }
+label.pick { cursor: pointer; }
+label.pick input[type=radio] { accent-color: var(--pink); width: 1.05rem; height: 1.05rem; flex: none; }
+.timeline form { margin-left: .4rem; }

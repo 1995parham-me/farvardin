@@ -1,0 +1,31 @@
+{{template "head" .}}
+<div class="pagehead"><h1>Duplicates <span class="count">{{len .Groups}}</span></h1></div>
+{{template "tidytabs" .}}
+{{if .NotSame}}<p class="flash good" role="status">{{template "icon" "check"}}Marked as different contacts. The group comes back only if another card joins it.</p>{{end}}
+{{if .Failed}}<p class="flash bad" role="alert">{{template "icon" "alert"}}{{.Failed}}</p>{{end}}
+<p class="muted">Cards that share a phone number, an email address or a name. A company and its people, or two people of one company, are not grouped by a shared number or email. A number on two cards names an SMS or a call after whichever card is found first. Merging keeps the card you pick, adds what only the others have (numbers, emails, links, dates, the larger photo) and then deletes the others; every step is in the history.</p>
+{{if .Groups}}
+{{range .Groups}}
+<section class="panel dup">
+  <p class="chips">{{range .Reasons}}<span class="chip warn">{{.}}</span>{{end}}</p>
+  <form method="post" action="{{ui "/duplicates/merge"}}">
+    <input type="hidden" name="book" value="{{.Book}}">
+    <ul class="list">
+      {{range .Cards}}
+      <li><label class="row pick">
+        {{if $.CanWrite}}<input type="radio" name="keep" value="{{.File}}"{{if .Best}} checked{{end}}>{{end}}
+        <input type="hidden" name="id" value="{{.File}}"><input type="hidden" name="etag" value="{{.ETag}}">
+        {{template "avatar" .}}
+        <span class="grow"><a class="name" dir="auto" href="{{ui "/contacts/"}}{{.Book}}/{{.File}}">{{.Name}}</a>
+        <span class="muted mono" dir="auto">{{join .Phones " · "}}{{if and .Phones .Emails}} · {{end}}{{join .Emails " · "}}</span></span>
+      </label></li>
+      {{end}}
+    </ul>
+    {{if $.CanWrite}}<p class="actions"><button class="button primary" type="submit">{{template "icon" "merge"}}Merge into the selected card</button>
+    <button class="button" type="submit" formaction="{{ui "/duplicates/notsame"}}">Not the same</button></p>{{end}}
+  </form>
+</section>
+{{end}}
+{{else}}<p class="empty good">{{template "icon" "check"}}No two cards share a number, an email or a name.</p>{{end}}
+{{if .Hidden}}<form class="hidden-groups" method="post" action="{{ui "/duplicates/showall"}}"><span class="muted">{{.Hidden}} {{if eq .Hidden 1}}group{{else}}groups{{end}} marked as different contacts.</span>{{if .CanWrite}} <button class="button link" type="submit">Show them again</button>{{end}}</form>{{end}}
+{{template "foot" .}}

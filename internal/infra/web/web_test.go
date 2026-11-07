@@ -98,7 +98,7 @@ func setupRegion(t *testing.T, region ...string) (*httptest.Server, *http.Client
 		t.Fatal(err)
 	}
 
-	ui, err := web.New(s, d.Cache(), d.Birthdays, web.Options{Prefix: "/ui", DAVPrefix: "", Sessions: sessions, Writer: d.WriteCard, Full: d.Full(), ThumbnailCacheBytes: 1 << 20, PhoneRegion: region}, log)
+	ui, err := web.New(s, d.Cache(), d.Birthdays, web.Options{Prefix: "/ui", DAVPrefix: "", Sessions: sessions, Writer: d.WriteCard, Full: d.Full(), ThumbnailCacheBytes: 1 << 20, PhoneRegion: region, Deleter: d.DeleteObject}, log)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -307,5 +307,146 @@ func TestPhoneLintAndFix(t *testing.T) {
 
 	if _, body := get(t, c, srv.URL+"/ui/lint"); strings.Contains(body, "international form") {
 		t.Fatal("still reported after the fix")
+	}
+}
+
+// post sends a form from the UI's own origin and returns where the
+// redirects ended.
+func post(t *testing.T, c *http.Client, srv *httptest.Server, path string, form url.Values) *url.URL {
+	t.Helper()
+
+	req, _ := http.NewRequestWithContext(t.Context(), http.MethodPost, srv.URL+path, strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Origin", srv.URL)
+
+	resp, err := c.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_ = resp.Body.Close()
+
+	return resp.Request.URL
+}
+
+func TestTidy(t *testing.T) {
+	t.Parallel()
+
+	srv, c, book := setupRegion(t, "IR", "ES")
+
+	putCard := func(name, uid, fn string, lines ...string) string {
+		t.Helper()
+
+		data := "BEGIN:VCARD\r\nVERSION:3.0\r\nUID:" + uid + "\r\nFN:" + fn + "\r\nN:;" + fn + ";;;\r\n" + strings.Join(lines, "\r\n") + "\r\nEND:VCARD\r\n"
+
+		etag, _, err := book.Put(name, []byte(data), store.Condition{}, "DAVx5/4.5.10-ose (at.bitfire.davdroid)")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		return etag
+	}
+
+	ka := putCard("k.vcf", "k", "Kubit", "TEL:0912 352 5311")
+	kb := putCard("l.vcf", "l", "Kubit Support", "TEL:+989123525311", "EMAIL:help@kubit.example")
+	putCard("m.vcf", "m", "Correos", "TEL:900 400 004")
+
+	resp, err := c.PostForm(srv.URL+"/ui/login", url.Values{"username": {"parham"}, "password": {"s3cret"}, "next": {"/ui/"}}) //nolint:noctx // test
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_ = resp.Body.Close()
+
+	// Duplicates, then merge l.vcf into k.vcf.
+	if _, body := get(t, c, srv.URL+"/ui/duplicates"); !strings.Contains(body, "same number &#43;989123525311") || !strings.Contains(body, "Kubit Support") {
+		t.Fatalf("duplicates page:\n%s", body)
+	}
+
+	if u := post(t, c, srv, "/ui/duplicates/merge", url.Values{"book": {"addressbook"}, "keep": {"k.vcf"}, "id": {"k.vcf", "l.vcf"}, "etag": {ka, "stale"}}); !strings.Contains(u.RawQuery, "error=") {
+		t.Fatalf("stale merge went through: %s", u)
+	}
+
+	u := post(t, c, srv, "/ui/duplicates/merge", url.Values{"book": {"addressbook"}, "keep": {"k.vcf"}, "id": {"k.vcf", "l.vcf"}, "etag": {ka, kb}})
+	if u.Path != "/ui/contacts/addressbook/k.vcf" || u.Query().Get("merged") != "1" {
+		t.Fatalf("merge: %s", u)
+	}
+
+	if data, _, _ := book.Read("k.vcf"); !strings.Contains(string(data), "EMAIL:help@kubit.example") {
+		t.Fatalf("merged card:\n%s", data)
+	}
+
+	// The merged-away card is listed as deleted and can come back.
+	if _, body := get(t, c, srv.URL+"/ui/deleted"); !strings.Contains(body, "Kubit Support") || !strings.Contains(body, "Web UI") {
+		t.Fatalf("deleted page:\n%s", body)
+	}
+
+	u = post(t, c, srv, "/ui/deleted/restore", url.Values{"book": {"addressbook"}, "name": {"l.vcf"}})
+	if u.Path != "/ui/contacts/addressbook/l.vcf" || !strings.Contains(u.RawQuery, "back=1") {
+		t.Fatalf("restore deleted: %s", u)
+	}
+
+	if data, _, _ := book.Read("l.vcf"); !strings.Contains(string(data), "FN:Kubit Support") {
+		t.Fatalf("restored card:\n%s", data)
+	}
+
+	// Restore k.vcf to the version before the merge.
+	snap, _ := book.Snapshot()
+	cur, _ := snap.Lookup("k.vcf")
+
+	if _, body := get(t, c, srv.URL+"/ui/contacts/addressbook/k.vcf"); !strings.Contains(body, `name="from" value="`+ka+`"`) {
+		t.Fatalf("no restore button for the earlier version:\n%s", body)
+	}
+
+	u = post(t, c, srv, "/ui/contacts/addressbook/k.vcf/restore", url.Values{"from": {ka}, "if_match": {cur.ETag}})
+	if !strings.Contains(u.RawQuery, "version=1") {
+		t.Fatalf("restore version: %s", u)
+	}
+
+	if _, etag, _ := book.Read("k.vcf"); etag != ka {
+		t.Fatalf("k.vcf is %s, want the old %s", etag, ka)
+	}
+
+	// Fix every number at once: k.vcf (Iranian) and m.vcf (Spanish).
+	if _, body := get(t, c, srv.URL+"/ui/lint"); !strings.Contains(body, "Add country codes everywhere (2 on 2 cards)") {
+		t.Fatalf("lint page:\n%s", body)
+	}
+
+	u = post(t, c, srv, "/ui/lint/phones", nil)
+	if q := u.Query(); q.Get("phones") != "2" || q.Get("cards") != "2" || q.Get("error") != "" {
+		t.Fatalf("fix all: %s", u)
+	}
+
+	if data, _, _ := book.Read("m.vcf"); !strings.Contains(string(data), "TEL:+34900400004\r\n") {
+		t.Fatalf("m.vcf:\n%s", data)
+	}
+
+	// k.vcf and l.vcf are a group again; mark them as different contacts.
+	u = post(t, c, srv, "/ui/duplicates/notsame", url.Values{"book": {"addressbook"}, "id": {"k.vcf", "l.vcf"}})
+	if u.Query().Get("notsame") != "1" {
+		t.Fatalf("not the same: %s", u)
+	}
+
+	if _, body := get(t, c, srv.URL+"/ui/duplicates"); strings.Contains(body, "Kubit Support") || !strings.Contains(body, "1 group marked as different contacts.") {
+		t.Fatalf("duplicates page after marking:\n%s", body)
+	}
+
+	post(t, c, srv, "/ui/duplicates/showall", nil)
+
+	if _, body := get(t, c, srv.URL+"/ui/duplicates"); !strings.Contains(body, "Kubit Support") {
+		t.Fatalf("duplicates page after show all:\n%s", body)
+	}
+
+	// Without the Origin check passing, nothing is written.
+	req, _ := http.NewRequestWithContext(t.Context(), http.MethodPost, srv.URL+"/ui/lint/phones", nil)
+
+	resp, err = c.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("cross-site post: %d", resp.StatusCode)
 	}
 }

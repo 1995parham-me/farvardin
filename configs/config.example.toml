@@ -11,10 +11,16 @@ ui = true
 metrics = true
 # Serve /metrics on its own address instead, e.g. "127.0.0.1:8001".
 metrics_listen = ""
+# Where you are (IANA, like "Europe/Madrid"): the web UI and MCP show times
+# in it, an event time written without a zone is read in it, and "today"
+# begins in it. "" uses the system's zone.
+timezone = ""
 
 [store]
 # Same layout as Xandikos: <root>/<principal>/{contacts,calendars}/<name>/
-# Each collection is a git repository. Point this at an existing Xandikos
+# Each collection is a git repository. farvardin keeps its own small
+# state (groups marked "not duplicates") in <root>/.farvardin/, outside
+# every collection. Point this at an existing Xandikos
 # store to serve it as it is.
 root = "/var/lib/farvardin"
 principal = "user"

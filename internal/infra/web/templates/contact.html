@@ -18,6 +18,9 @@
 
   {{if .Restored}}<p class="flash good" role="status">{{template "icon" "check"}}Photo restored. The phones get it on their next sync, pushed right away.</p>{{end}}
   {{if .Failed}}<p class="flash bad" role="alert">{{template "icon" "alert"}}{{.Failed}}</p>{{end}}
+  {{if .Back}}<p class="flash good" role="status">{{template "icon" "check"}}Contact restored. The phones get it on their next sync, pushed right away.</p>{{end}}
+  {{if .VersionRestored}}<p class="flash good" role="status">{{template "icon" "check"}}Earlier version restored. The phones get it on their next sync, pushed right away.</p>{{end}}
+  {{if .Merged}}<p class="flash good" role="status">{{template "icon" "check"}}Merged {{.Merged}} other card(s) into this one.</p>{{end}}
   {{if .PhonesFixed}}<p class="flash good" role="status">{{template "icon" "check"}}Phone numbers fixed ({{.PhonesFixed}}). The phones get them on their next sync, pushed right away.</p>{{end}}
   {{if .Issues}}<ul class="issues">{{range .Issues}}<li class="{{.Severity}}">{{template "icon" "alert"}}<span class="grow">{{.Message}}{{if .Fix}} → <span class="mono">{{.Fix}}</span>{{end}}</span></li>{{end}}</ul>{{end}}
   {{if and .PhoneFixes $.CanWrite}}<form class="fix" method="post" action="{{$.File}}/phones"><input type="hidden" name="if_match" value="{{$.Object.ETag}}"><button class="button primary" type="submit">{{template "icon" "phone"}}Add country codes ({{len .PhoneFixes}})</button><span class="muted">Writes {{range $i, $f := .PhoneFixes}}{{if $i}}, {{end}}<span class="mono">{{$f.To}}</span>{{end}}; labels and everything else stay as they are.</span></form>{{end}}
@@ -54,8 +57,9 @@
   <section class="panel">
     <h2>{{template "icon" "clock"}}History</h2>
     <ol class="list timeline">
-      {{range .Timeline}}
-      <li><span class="dot {{.Kind}}"></span><div class="grow"><span>{{.Summary}}</span><span class="muted">{{.Device}} · <code>{{short .Rev.Commit}}</code></span></div><span class="muted mono" title="{{datetime .Rev.When}}">{{ago .Rev.When}}</span></li>
+      {{range $i, $e := .Timeline}}
+      <li><span class="dot {{.Kind}}"></span><div class="grow"><span>{{.Summary}}</span><span class="muted">{{.Device}} · <code>{{short .Rev.Commit}}</code></span></div><span class="muted mono" title="{{datetime .Rev.When}}">{{ago .Rev.When}}</span>
+      {{if and $.CanWrite $i .Rev.ETag (ne .Rev.ETag $.Object.ETag)}}<form method="post" action="{{$.File}}/restore"><input type="hidden" name="from" value="{{.Rev.ETag}}"><input type="hidden" name="if_match" value="{{$.Object.ETag}}"><button class="ghost" type="submit" title="Put the card back as it was after this change">{{template "icon" "restore"}}</button></form>{{end}}</li>
       {{end}}
     </ol>
   </section>

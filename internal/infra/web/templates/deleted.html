@@ -1,0 +1,17 @@
+{{template "head" .}}
+<div class="pagehead"><h1>Deleted <span class="count">{{len .Rows}}</span></h1></div>
+{{template "tidytabs" .}}
+{{if .Failed}}<p class="flash bad" role="alert">{{template "icon" "alert"}}{{.Failed}}</p>{{end}}
+<p class="muted">Contacts deleted from a phone, the web UI or MCP stay in git. Restore brings one back as it was just before the delete, and the phones get it on their next sync.</p>
+{{if .Rows}}
+<ul class="list">
+  {{range .Rows}}
+  <li class="row"><span class="avatar h{{hue .Display}}" aria-hidden="true">{{initials .Display}}</span>
+    <span class="grow"><span class="name" dir="auto">{{.Display}}</span><span class="muted" dir="auto">{{if .Phone}}{{.Phone}} · {{end}}deleted by {{.Device}}</span></span>
+    <span class="muted mono" title="{{datetime .Deleted.When}}">{{ago .Deleted.When}}</span>
+    {{if $.CanWrite}}<form method="post" action="{{ui "/deleted/restore"}}"><input type="hidden" name="book" value="{{.Book}}"><input type="hidden" name="name" value="{{.Name}}"><button class="button" type="submit">{{template "icon" "restore"}}Restore</button></form>{{end}}
+  </li>
+  {{end}}
+</ul>
+{{else}}<p class="empty good">{{template "icon" "check"}}Nothing has been deleted.</p>{{end}}
+{{template "foot" .}}

@@ -1,6 +1,10 @@
 {{template "head" .}}
 <div class="pagehead"><h1>Lint <span class="count">{{len .Findings}}</span></h1></div>
-<p class="muted">Errors stop a client from saving the card again; warnings are advice. A suggested value (→) can be applied from the contact's page.</p>
+{{template "tidytabs" .}}
+{{if .PhonesFixed}}<p class="flash good" role="status">{{template "icon" "check"}}Fixed {{.PhonesFixed}} phone numbers on {{.CardsFixed}} cards. The phones get them on their next sync, pushed right away.</p>{{end}}
+{{if .Failed}}<p class="flash bad" role="alert">{{template "icon" "alert"}}{{.Failed}}</p>{{end}}
+<p class="muted">Errors stop a client from saving the card again; warnings are advice. A suggested value (→) can be applied from the contact's page, or all at once below.</p>
+{{if and .FixCards .CanWrite}}<form class="fix" method="post" action="{{ui "/lint/phones"}}"><button class="button primary" type="submit">{{template "icon" "phone"}}Add country codes everywhere ({{.FixNumbers}} on {{.FixCards}} cards)</button><span class="muted">One change per card; labels and everything else stay as they are.</span></form>{{end}}
 {{if .Findings}}
 <ul class="list">
   {{range .Findings}}

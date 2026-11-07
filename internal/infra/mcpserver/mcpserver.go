@@ -67,7 +67,8 @@ func Handler(b Backend, tokens map[string]string) http.Handler {
 	server := mcp.NewServer(&mcp.Implementation{Name: "farvardin", Title: "farvardin contacts and calendars", Version: Version}, &mcp.ServerOptions{ //nolint:exhaustruct // defaults
 		Instructions: "Contacts (vCards) and calendars (iCalendar) of one person, kept in git and synced to their phones. " +
 			"Search before you create, to avoid duplicates. Writes are pushed to the phones at once and every change is a git commit, " +
-			"so pass the etag you read to update or delete, and prefer field updates over raw vCards.",
+			"so pass the etag you read to update or delete, and prefer field updates over raw vCards. " +
+			"The owner's time zone is " + time.Local.String() + ": times are shown in it, and a time without an offset is read in it.", //nolint:gosmopolitan // the configured zone
 	})
 
 	t := tools{b: b}
@@ -140,8 +141,9 @@ func (t tools) register(s *mcp.Server) {
 	mcp.AddTool(s, tool("contact_history", "List the changes of a contact, newest first: when, which device, and the revision id of each.", readOnly()), t.contactHistory)
 	mcp.AddTool(s, tool("restore_contact_photo", "Put back the photo a contact had at an earlier revision (from contact_history), for example a full photo a phone replaced with a thumbnail.", writes(false)), t.restorePhoto)
 	mcp.AddTool(s, tool("fix_contact_phones", "Write a contact's phone numbers that have no country code in international (E.164) form, the fixes lint_contacts suggests. Labels and every other field stay as they are. Pass the etag you read.", writes(false)), t.fixPhones)
+	t.registerTidy(s, tool)
 	mcp.AddTool(s, tool("upcoming_birthdays", "Birthdays and anniversaries in the next N days, with ages where the year is known.", readOnly()), t.upcomingBirthdays)
-	mcp.AddTool(s, tool("lint_contacts", "List contacts that fail validation (errors stop phones from saving them) or have warnings (phone numbers not in international form, repeated numbers, and more), and contacts with low-resolution photos. A warning with a fix can be applied with fix_contact_phones.", readOnly()), t.lintContacts)
+	mcp.AddTool(s, tool("lint_contacts", "List contacts that fail validation (errors stop phones from saving them) or have warnings (phone numbers not in international form, repeated numbers, and more), and contacts with low-resolution photos. A warning with a fix can be applied with fix_contact_phones, or all at once with fix_all_contact_phones.", readOnly()), t.lintContacts)
 	mcp.AddTool(s, tool("list_calendars", "List the calendars, including the generated read-only birthdays calendar.", readOnly()), t.listCalendars)
 	mcp.AddTool(s, tool("list_events", "List events between two dates (default: the next 30 days), across all calendars or one. Repeating events are listed at their next occurrence in the range.", readOnly()), t.listEvents)
 	mcp.AddTool(s, tool("get_event", "Read one event by calendar and id, with its raw iCalendar.", readOnly()), t.getEvent)
@@ -1033,7 +1035,7 @@ func timeString(tm time.Time, allDay bool) string {
 		return tm.Format("2006-01-02")
 	}
 
-	return tm.Local().Format(time.RFC3339) //nolint:gosmopolitan // times are shown in the server's zone, with the offset
+	return tm.Local().Format(time.RFC3339) //nolint:gosmopolitan // times are shown in the owner's zone (server.timezone), with the offset
 }
 
 func eventSummary(cal string, o store.Object, c *calendar.Component, at time.Time) EventSummary {
@@ -1074,7 +1076,7 @@ func parseDay(s string, def time.Time) (time.Time, error) {
 		return def, nil
 	}
 
-	t, err := time.ParseInLocation("2006-01-02", strings.TrimSpace(s), time.Local) //nolint:gosmopolitan // dates are days in the server's zone
+	t, err := time.ParseInLocation("2006-01-02", strings.TrimSpace(s), time.Local) //nolint:gosmopolitan // dates are days in the owner's zone
 	if err != nil {
 		return time.Time{}, fmt.Errorf("%w: %q is not YYYY-MM-DD", ErrBadInput, s)
 	}
@@ -1208,7 +1210,7 @@ func parseWhen(s string) (time.Time, bool, error) {
 		return t, false, nil
 	}
 
-	if t, err := time.ParseInLocation("2006-01-02T15:04", s, time.Local); err == nil { //nolint:gosmopolitan // a time without offset is in the server's zone
+	if t, err := time.ParseInLocation("2006-01-02T15:04", s, time.Local); err == nil { //nolint:gosmopolitan // a time without offset is in the owner's zone
 		return t, false, nil
 	}
 

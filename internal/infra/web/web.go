@@ -23,6 +23,7 @@ import (
 
 	"github.com/1995parham-me/farvardin/internal/domain/calendar"
 	"github.com/1995parham-me/farvardin/internal/domain/contact"
+	"github.com/1995parham-me/farvardin/internal/infra/edits"
 	"github.com/1995parham-me/farvardin/internal/infra/store"
 )
 
@@ -57,6 +58,8 @@ type Options struct {
 	// PhoneRegion is the country of numbers written without a country
 	// code; lint suggests their E.164 form and the contact page fixes them.
 	PhoneRegion []string
+	// Deleter removes an object; with Writer it enables merging duplicates.
+	Deleter func(kind store.Kind, col, name, ifMatch, requester string) error
 }
 
 // Handler is the UI http.Handler, mounted at Prefix.
@@ -75,6 +78,7 @@ type Handler struct {
 	mux       *http.ServeMux
 	thumbs    *thumbCache
 	lists     *listCache
+	edit      edits.Editor
 }
 
 // New builds the UI.
@@ -84,6 +88,10 @@ func New(s *store.Store, parse Parser, birthdays BirthdaySource, opts Options, l
 		prefix: strings.TrimSuffix(opts.Prefix, "/"), davPrefix: strings.TrimSuffix(opts.DAVPrefix, "/"), region: opts.PhoneRegion,
 		sessions: opts.Sessions, log: log, tmpl: nil, mux: http.NewServeMux(),
 		thumbs: newThumbCache(opts.ThumbnailCacheBytes), lists: newListCache(),
+		edit: edits.Editor{
+			Store: s, Parse: edits.Parser(parse), Full: edits.Parser(opts.Full),
+			Write: opts.Writer, Delete: opts.Deleter, Regions: opts.PhoneRegion,
+		},
 	}
 
 	funcs := template.FuncMap{
@@ -93,9 +101,10 @@ func New(s *store.Store, parse Parser, birthdays BirthdaySource, opts Options, l
 		"hue":      hue,
 		"date":     func(t time.Time) string { return t.Format("Mon 2 Jan 2006") },
 		"day":      func(t time.Time) string { return t.Format("2 Jan") },
-		"clock":    func(t time.Time) string { return t.Local().Format("15:04") },            //nolint:gosmopolitan // the UI shows the server's local time on purpose
+		"clock":    func(t time.Time) string { return t.Local().Format("15:04") },            //nolint:gosmopolitan // the UI shows times in the owner's zone (server.timezone)
 		"datetime": func(t time.Time) string { return t.Local().Format("2 Jan 2006 15:04") }, //nolint:gosmopolitan // as above
 		"ago":      ago,
+		"zone":     func() string { return time.Local.String() }, //nolint:gosmopolitan // the owner's zone
 		"short":    func(s string) string { return s[:min(8, len(s))] },
 		"kib":      func(n int64) string { return strconv.FormatInt((n+1023)/1024, 10) + " KiB" },
 		"join":     strings.Join,
@@ -129,6 +138,14 @@ func New(s *store.Store, parse Parser, birthdays BirthdaySource, opts Options, l
 	h.mux.HandleFunc("GET "+p+"/photo/{book}/{name}", h.photo)
 	h.mux.HandleFunc("GET "+p+"/calendars/{cal}/{$}", h.events)
 	h.mux.HandleFunc("GET "+p+"/lint", h.lint)
+	h.mux.HandleFunc("POST "+p+"/lint/phones", h.fixAllPhones)
+	h.mux.HandleFunc("GET "+p+"/duplicates", h.duplicates)
+	h.mux.HandleFunc("POST "+p+"/duplicates/merge", h.merge)
+	h.mux.HandleFunc("POST "+p+"/duplicates/notsame", h.notSame)
+	h.mux.HandleFunc("POST "+p+"/duplicates/showall", h.showAllDuplicates)
+	h.mux.HandleFunc("GET "+p+"/deleted", h.deleted)
+	h.mux.HandleFunc("POST "+p+"/deleted/restore", h.restoreDeleted)
+	h.mux.HandleFunc("POST "+p+"/contacts/{book}/{name}/restore", h.restoreVersion)
 
 	return h, nil
 }
@@ -420,6 +437,7 @@ func (h *Handler) contactPage(w http.ResponseWriter, r *http.Request) {
 		"Issues": contact.Lint(*card, h.region), "PhoneFixes": phoneFixes, "PhonesFixed": r.URL.Query().Get("phones"), "Timeline": h.timeline(book, revs), "Photos": h.photoHistory(book, *card, revs),
 		"Object": obj, "HasPhoto": hasPhoto, "PhotoInfo": photoInfo, "Version": card.Version(), "CanWrite": h.write != nil,
 		"Restored": r.URL.Query().Get("restored") != "", "Failed": r.URL.Query().Get("error"),
+		"Back": r.URL.Query().Get("back") != "", "VersionRestored": r.URL.Query().Get("version") != "", "Merged": r.URL.Query().Get("merged"),
 		"Raw": h.davPrefix + "/" + h.store.Principal() + "/contacts/" + book.Name() + "/" + name,
 	})
 }
@@ -567,7 +585,12 @@ func (h *Handler) lint(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	h.render(w, r, "lint.html", map[string]any{"Title": "Lint", "Findings": findings})
+	cards, numbers := h.fixable()
+
+	h.render(w, r, "lint.html", map[string]any{
+		"Title": "Lint", "Findings": findings, "FixCards": cards, "FixNumbers": numbers, "CanWrite": h.write != nil,
+		"PhonesFixed": r.URL.Query().Get("phones"), "CardsFixed": r.URL.Query().Get("cards"), "Failed": r.URL.Query().Get("error"),
+	})
 }
 
 // phoneQuery returns the digits of a search that looks like a phone

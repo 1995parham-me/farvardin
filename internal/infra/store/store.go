@@ -92,6 +92,13 @@ func OpenWithOptions(root, principal string, author Author, opts Options) (*Stor
 	return s, nil
 }
 
+// StatePath is where farvardin keeps a state file of its own (name) next
+// to the principal: <root>/.farvardin/<name>. It is outside every
+// collection, so no client ever sees it, and it moves with the store.
+func (s *Store) StatePath(name string) string {
+	return filepath.Join(s.root, ".farvardin", name)
+}
+
 // Principal returns the principal name.
 func (s *Store) Principal() string { return s.principal }
 

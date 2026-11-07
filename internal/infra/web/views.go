@@ -336,7 +336,7 @@ func (h *Handler) restorePhoto(w http.ResponseWriter, r *http.Request) {
 	data := contact.WithPhotoOf(*cur, *old).Encode()
 	user := userFrom(r.Context())
 
-	if _, err := h.write(bookName, name, data, obj.ETag, "farvardin web UI ("+user+")"); err != nil {
+	if _, err := h.write(bookName, name, data, obj.ETag, uiRequester(user)); err != nil {
 		fail(err.Error())
 
 		return
@@ -405,7 +405,7 @@ func (h *Handler) fixPhones(w http.ResponseWriter, r *http.Request) {
 
 	user := userFrom(r.Context())
 
-	if _, err := h.write(bookName, name, fixed.Encode(), obj.ETag, "farvardin web UI ("+user+")"); err != nil {
+	if _, err := h.write(bookName, name, fixed.Encode(), obj.ETag, uiRequester(user)); err != nil {
 		fail(err.Error())
 
 		return
@@ -813,7 +813,7 @@ func groupRows(rows []eventRow, today time.Time) []dayGroup {
 	var out []dayGroup
 
 	for _, row := range rows {
-		d := truncate(row.When.Local()) //nolint:gosmopolitan // the agenda is in the server's local time
+		d := truncate(row.When.Local()) //nolint:gosmopolitan // the agenda is in the owner's zone (server.timezone)
 
 		if len(out) == 0 || !out[len(out)-1].Date.Equal(d) {
 			label := d.Format("Monday 2 January")
@@ -895,4 +895,13 @@ func (h *Handler) events(w http.ResponseWriter, r *http.Request) {
 		"Title": title, "Days": groupRows(rows, today), "Count": len(rows),
 		"Feed": h.davPrefix + "/" + h.store.Principal() + "/calendars/" + name + "/",
 	})
+}
+
+// uiRequester names a web UI write in the commit.
+func uiRequester(user string) string {
+	if user == "" {
+		return "farvardin web UI"
+	}
+
+	return "farvardin web UI (" + user + ")"
 }

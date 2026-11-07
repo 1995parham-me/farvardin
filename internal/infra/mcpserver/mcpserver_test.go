@@ -270,3 +270,73 @@ func TestPhoneTools(t *testing.T) {
 		t.Fatalf("create: %s %+v", msg, created)
 	}
 }
+
+func TestTidyTools(t *testing.T) {
+	t.Parallel()
+
+	b, s := backend(t)
+	b.PhoneRegion = []string{"IR", "ES"}
+	cs := connect(t, b)
+
+	book, _ := s.Collection(store.AddressBook, "addressbook")
+
+	put := func(name, data string) {
+		t.Helper()
+
+		if _, _, err := book.Put(name, []byte(data), store.Condition{}, "test"); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	put("a.vcf", "BEGIN:VCARD\r\nVERSION:3.0\r\nUID:a\r\nFN:Rodalies\r\nN:;Rodalies;;;\r\nTEL:900 410 041\r\nEND:VCARD\r\n")
+	put("b.vcf", "BEGIN:VCARD\r\nVERSION:3.0\r\nUID:b\r\nFN:Renfe Rodalies\r\nN:;Renfe Rodalies;;;\r\nTEL:+34900410041\r\nURL:https://rodalies.example\r\nEND:VCARD\r\n")
+
+	dups, isErr, msg := call[DuplicatesOut](t, cs, "find_duplicate_contacts", map[string]any{})
+	if isErr || len(dups.Groups) != 1 || strings.Join(dups.Groups[0].IDs, ",") != "a.vcf,b.vcf" {
+		t.Fatalf("duplicates: %s %+v", msg, dups)
+	}
+
+	merged, isErr, msg := call[MergeOut](t, cs, "merge_contacts", map[string]any{"keep": map[string]any{"id": "a.vcf"}, "others": []map[string]any{{"id": "b.vcf"}}})
+	if isErr || len(merged.Merged) != 1 || len(merged.URLs) != 1 || len(merged.Phones) != 1 {
+		t.Fatalf("merge: %s %+v", msg, merged)
+	}
+
+	gone, _, _ := call[DeletedOut](t, cs, "list_deleted_contacts", map[string]any{})
+	if len(gone.Deleted) != 1 || gone.Deleted[0].ID != "b.vcf" || gone.Deleted[0].Name != "Renfe Rodalies" || gone.Deleted[0].DeletedBy != "MCP · mcp" {
+		t.Fatalf("deleted: %+v", gone)
+	}
+
+	back, isErr, msg := call[ContactDetail](t, cs, "restore_contact", map[string]any{"id": "b.vcf"})
+	if isErr || back.Name != "Renfe Rodalies" {
+		t.Fatalf("restore deleted: %s %+v", msg, back)
+	}
+
+	// An existing contact needs a revision.
+	if _, isErr, _ := call[ContactDetail](t, cs, "restore_contact", map[string]any{"id": "a.vcf"}); !isErr {
+		t.Fatal("restore of an existing contact without a revision went through")
+	}
+
+	hist, _, _ := call[HistoryOut](t, cs, "contact_history", map[string]any{"id": "a.vcf"})
+	if len(hist.Revisions) != 2 {
+		t.Fatalf("history: %+v", hist)
+	}
+
+	old, isErr, msg := call[ContactDetail](t, cs, "restore_contact", map[string]any{"id": "a.vcf", "revision": hist.Revisions[1].Revision})
+	if isErr || len(old.URLs) != 0 {
+		t.Fatalf("restore version: %s %+v", msg, old)
+	}
+
+	fixed, isErr, msg := call[FixAllOut](t, cs, "fix_all_contact_phones", map[string]any{})
+	if isErr || fixed.Fixed != 1 || fixed.Contacts[0].ID != "a.vcf" {
+		t.Fatalf("fix all: %s %+v", msg, fixed)
+	}
+
+	if _, isErr, _ := call[DuplicatesOut](t, cs, "mark_not_duplicates", map[string]any{"ids": []string{"a.vcf"}}); !isErr {
+		t.Fatal("part of a group was marked")
+	}
+
+	marked, isErr, msg := call[DuplicatesOut](t, cs, "mark_not_duplicates", map[string]any{"ids": []string{"a.vcf", "b.vcf"}})
+	if isErr || len(marked.Groups) != 0 || marked.Hidden != 1 {
+		t.Fatalf("mark not duplicates: %s %+v", msg, marked)
+	}
+}

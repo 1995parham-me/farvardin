@@ -102,6 +102,10 @@ type Server struct {
 	// MetricsListen serves /metrics on its own address (for example
 	// 127.0.0.1:8001); empty serves it on Listen.
 	MetricsListen string `json:"metrics_listen" koanf:"metrics_listen"`
+	// Timezone (IANA, "Europe/Madrid") is where the owner is: the web UI
+	// and MCP show times in it, a time written without an offset or zone
+	// is read in it, and "today" begins in it. "" keeps the system zone.
+	Timezone string `json:"timezone" koanf:"timezone"`
 }
 
 // Store is the git store.
@@ -158,7 +162,7 @@ type Log struct {
 // Default returns the built-in defaults.
 func Default() Config {
 	return Config{
-		Server: Server{Listen: "127.0.0.1:8000", Prefix: "", UI: true, Metrics: true, MetricsListen: ""},
+		Server: Server{Listen: "127.0.0.1:8000", Prefix: "", UI: true, Metrics: true, MetricsListen: "", Timezone: ""},
 		Store:  Store{Root: "/var/lib/farvardin", Principal: "user", AuthorName: "farvardin", AuthorEmail: "farvardin@localhost", Init: true},
 		Auth:   Auth{Mode: "none", Realm: "farvardin", Header: "X-Remote-User", Users: nil},
 		Contacts: Contacts{
@@ -246,6 +250,12 @@ func (c Config) Validate() error {
 		}
 	default:
 		return fmt.Errorf("%w: ui.auth must be proxy or jwt, not %q", ErrInvalid, c.UI.Auth)
+	}
+
+	if c.Server.Timezone != "" {
+		if _, err := time.LoadLocation(c.Server.Timezone); err != nil {
+			return fmt.Errorf("%w: server.timezone %q is not a known time zone (IANA, like \"Europe/Madrid\")", ErrInvalid, c.Server.Timezone)
+		}
 	}
 
 	for _, r := range c.Contacts.PhoneRegion {

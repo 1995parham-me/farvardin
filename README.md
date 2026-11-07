@@ -45,6 +45,8 @@ Your phones sync contacts and calendars over CardDAV and CalDAV, and the server 
 - **Photo guard**: thumbnails never replace a full photo; re-encodes keep the stored bytes; oversized photos are scaled once
 - Byte-exact storage: lines nobody edited keep their bytes
 - **Phone numbers**: with `phone_region` set to one country or a list (`["IR", "ES"]`), lint suggests the E.164 form of numbers without a country code and fixes them on request; search finds a number however it is written
+- **Duplicates**: cards that share a number, an email or a name are grouped and can be merged into one, or marked as different contacts; a company and its people are never grouped by a shared number or email
+- **Undelete**: every deleted contact can be restored, and any card can go back to an earlier version
 
 </td>
 <td width="33%" valign="top">
@@ -56,6 +58,7 @@ Your phones sync contacts and calendars over CardDAV and CalDAV, and the server 
 - Every calendar is also a **webcal feed** (`GET` returns one `.ics`)
 - `MKCALENDAR`, colors, order and descriptions for Apple clients
 - Push to the phones the moment anything changes
+- **Your time zone** (`server.timezone`): floating times and all-day dates are read where you are, and Outlook zone names are understood
 
 </td>
 <td width="33%" valign="top">
@@ -77,7 +80,8 @@ Your phones sync contacts and calendars over CardDAV and CalDAV, and the server 
 - Dashboard: coming birthdays, this week, recent changes by device
 - Contacts: letter index, filters, search as you type (`/`)
 - Per-contact **field-level history** and **photo history with Restore**
-- Lint report, downloads in 3.0 / 4.0 / JSContact
+- **Tidy**: lint with *Add country codes everywhere*, duplicates with merge, deleted contacts with restore
+- Restore any earlier version of a card; downloads in 3.0 / 4.0 / JSContact
 - Its own login (JWT), in the [Naz](https://github.com/1995parham/naz.vim) palette, no external assets
 
 </td>
@@ -85,9 +89,10 @@ Your phones sync contacts and calendars over CardDAV and CalDAV, and the server 
 
 ### 🤖 MCP
 
-- A [Model Context Protocol](https://modelcontextprotocol.io) endpoint with 15 tools
+- A [Model Context Protocol](https://modelcontextprotocol.io) endpoint with 22 tools
 - Search, read, create, update and delete contacts and events
 - History, photo restore, birthdays, lint
+- Duplicates and merge, undelete, fix every phone number at once
 - Every write is checked like a phone's and is a git commit naming the token
 
 </td>
@@ -185,7 +190,8 @@ claude mcp add --transport http farvardin https://dav.example.com/mcp \
 | Contacts | Calendars |
 | --- | --- |
 | `search_contacts` · `get_contact` · `create_contact` · `update_contact` · `delete_contact` | `list_calendars` · `list_events` · `get_event` |
-| `contact_history` · `restore_contact_photo` · `upcoming_birthdays` · `lint_contacts` · `fix_contact_phones` | `create_event` · `update_event` · `delete_event` |
+| `contact_history` · `restore_contact_photo` · `upcoming_birthdays` · `lint_contacts` · `fix_contact_phones` · `fix_all_contact_phones` | `create_event` · `update_event` · `delete_event` |
+| `find_duplicate_contacts` · `merge_contacts` · `mark_not_duplicates` · `list_deleted_contacts` · `restore_contact` | |
 
 Writes take the etag that was read, so an assistant never overwrites a newer edit from a phone. They go through the same validation as a phone's write, are pushed to the phones at once, and are git commits with `Requester: farvardin MCP (<token>)`, so every change can be seen and undone. The config keeps only each token's SHA-256.
 

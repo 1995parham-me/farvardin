@@ -12,9 +12,13 @@ import (
 // ErrBadTime is returned for a date or date-time that cannot be read.
 var ErrBadTime = errors.New("bad iCalendar date or date-time")
 
-// ParseTime reads a DATE or DATE-TIME property. TZID is honoured when the
-// zone is known to the Go time zone database; otherwise the time is read
-// as UTC (callers that match ranges widen them to cover the error).
+// ParseTime reads a DATE or DATE-TIME property. A time with "Z" is UTC;
+// one with a TZID is read in that zone when the Go time zone database
+// knows it, directly or as a Windows zone name ("Mountain Standard
+// Time"). A floating time (neither) and a DATE are the same wall-clock
+// time wherever the reader is (RFC 5545 3.3.5), so they are read in
+// time.Local, the zone farvardin shows times in; so is a TZID nothing
+// knows (callers that match ranges widen them to cover the error).
 func ParseTime(p vcf.Line) (time.Time, bool, error) {
 	v := strings.TrimSpace(p.Value)
 	if i := strings.IndexByte(v, ','); i > 0 {
@@ -22,7 +26,7 @@ func ParseTime(p vcf.Line) (time.Time, bool, error) {
 	}
 
 	if len(v) == 8 || strings.EqualFold(firstValue(p.Param("VALUE")), "DATE") {
-		t, err := time.ParseInLocation("20060102", v[:min(8, len(v))], time.UTC)
+		t, err := time.ParseInLocation("20060102", v[:min(8, len(v))], time.Local) //nolint:gosmopolitan // a DATE is a day where the reader is
 		if err != nil {
 			return time.Time{}, true, ErrBadTime
 		}
@@ -30,11 +34,11 @@ func ParseTime(p vcf.Line) (time.Time, bool, error) {
 		return t, true, nil
 	}
 
-	loc := time.UTC
+	loc := time.Local //nolint:gosmopolitan // a floating time is wall-clock time where the reader is
 	if trimmed, ok := strings.CutSuffix(v, "Z"); ok {
-		v = trimmed
+		v, loc = trimmed, time.UTC
 	} else if tz := firstValue(p.Param("TZID")); tz != "" {
-		if l, err := time.LoadLocation(strings.TrimPrefix(tz, "/")); err == nil {
+		if l, ok := Zone(tz); ok {
 			loc = l
 		}
 	}
@@ -274,4 +278,45 @@ func NextOccurrence(cal *Component, from time.Time) (time.Time, bool) {
 	}
 
 	return t, true
+}
+
+// windowsZones maps the zone names Outlook and Exchange write in TZID to
+// IANA names (from CLDR's windowsZones.xml, the zones most likely to turn
+// up).
+var windowsZones = map[string]string{
+	"Dateline Standard Time": "Etc/GMT+12", "Hawaiian Standard Time": "Pacific/Honolulu",
+	"Alaskan Standard Time": "America/Anchorage", "Pacific Standard Time": "America/Los_Angeles",
+	"US Mountain Standard Time": "America/Phoenix", "Mountain Standard Time": "America/Denver",
+	"Central Standard Time": "America/Chicago", "Eastern Standard Time": "America/New_York",
+	"Atlantic Standard Time": "America/Halifax", "Newfoundland Standard Time": "America/St_Johns",
+	"E. South America Standard Time": "America/Sao_Paulo", "UTC": "Etc/UTC", "Coordinated Universal Time": "Etc/UTC",
+	"GMT Standard Time": "Europe/London", "Greenwich Standard Time": "Atlantic/Reykjavik",
+	"W. Europe Standard Time": "Europe/Berlin", "Romance Standard Time": "Europe/Paris",
+	"Central Europe Standard Time": "Europe/Budapest", "Central European Standard Time": "Europe/Warsaw",
+	"GTB Standard Time": "Europe/Bucharest", "FLE Standard Time": "Europe/Kiev", "E. Europe Standard Time": "Europe/Chisinau",
+	"Turkey Standard Time": "Europe/Istanbul", "Russian Standard Time": "Europe/Moscow",
+	"Israel Standard Time": "Asia/Jerusalem", "Arabian Standard Time": "Asia/Dubai", "Arab Standard Time": "Asia/Riyadh",
+	"Iran Standard Time": "Asia/Tehran", "Afghanistan Standard Time": "Asia/Kabul", "Pakistan Standard Time": "Asia/Karachi",
+	"India Standard Time": "Asia/Calcutta", "China Standard Time": "Asia/Shanghai", "Singapore Standard Time": "Asia/Singapore",
+	"Tokyo Standard Time": "Asia/Tokyo", "Korea Standard Time": "Asia/Seoul",
+	"AUS Eastern Standard Time": "Australia/Sydney", "E. Australia Standard Time": "Australia/Brisbane",
+	"New Zealand Standard Time": "Pacific/Auckland",
+}
+
+// Zone returns the location a TZID names: an IANA name, or a Windows
+// zone name Outlook writes.
+func Zone(tzid string) (*time.Location, bool) {
+	tzid = strings.Trim(strings.TrimPrefix(strings.TrimSpace(tzid), "/"), `"`)
+
+	if l, err := time.LoadLocation(tzid); err == nil && tzid != "" && tzid != "Local" {
+		return l, true
+	}
+
+	if name, ok := windowsZones[tzid]; ok {
+		if l, err := time.LoadLocation(name); err == nil {
+			return l, true
+		}
+	}
+
+	return nil, false
 }
