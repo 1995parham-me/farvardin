@@ -5,6 +5,8 @@
     <div class="grow">
       <h1 dir="auto">{{.Title}}</h1>
       {{if or .Org .JobTitle}}<p class="org" dir="auto">{{.JobTitle}}{{if and .Org .JobTitle}} · {{end}}{{.Org}}</p>{{end}}
+      {{if .IsGroup}}<p class="org">{{template "icon" "users"}}Group of {{len .Members}}</p>{{end}}
+      {{if .Groups}}<p class="chips">{{range .Groups}}{{if .File}}<a class="chip tag" href="{{.File}}" dir="auto">{{.Name}}</a>{{else}}<span class="chip tag" dir="auto">{{.Name}}</span>{{end}}{{end}}</p>{{end}}
       <p class="meta mono">vCard {{.Version}} · {{kib .Object.Size}}{{if .PhotoInfo}} · photo {{.PhotoInfo}}{{end}}</p>
       <div class="actions">
         {{range .Fields}}{{if eq .Kind "phone"}}<a class="button primary" href="{{.Link}}">{{template "icon" "phone"}}Call</a>{{break}}{{end}}{{end}}
@@ -24,6 +26,18 @@
   {{if .PhonesFixed}}<p class="flash good" role="status">{{template "icon" "check"}}Phone numbers fixed ({{.PhonesFixed}}). The phones get them on their next sync, pushed right away.</p>{{end}}
   {{if .Issues}}<ul class="issues">{{range .Issues}}<li class="{{.Severity}}">{{template "icon" "alert"}}<span class="grow">{{.Message}}{{if .Fix}} → <span class="mono">{{.Fix}}</span>{{end}}</span></li>{{end}}</ul>{{end}}
   {{if and .PhoneFixes $.CanWrite}}<form class="fix" method="post" action="{{$.File}}/phones"><input type="hidden" name="if_match" value="{{$.Object.ETag}}"><button class="button primary" type="submit">{{template "icon" "phone"}}Add country codes ({{len .PhoneFixes}})</button><span class="muted">Writes {{range $i, $f := .PhoneFixes}}{{if $i}}, {{end}}<span class="mono">{{$f.To}}</span>{{end}}; labels and everything else stay as they are.</span></form>{{end}}
+
+  {{if .IsGroup}}
+  <section class="panel">
+    <h2>{{template "icon" "users"}}Members</h2>
+    {{if .Members}}
+    <ul class="people">
+      {{range .Members}}<li><a href="{{.File}}">{{template "avatar" .}}<span class="grow"><span class="name" dir="auto">{{.Name}}</span><span class="muted" dir="auto">{{if .Org}}{{.Org}}{{else}}{{.Phone}}{{end}}</span></span></a></li>{{end}}
+    </ul>
+    {{else}}<p class="empty">This group has no members.</p>{{end}}
+    {{if .Lost}}<p class="muted">{{.Lost}} member(s) no longer have a card.</p>{{end}}
+  </section>
+  {{end}}
 
   <div class="grid2 wide">
     <section class="panel">

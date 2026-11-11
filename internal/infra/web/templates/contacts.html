@@ -8,14 +8,18 @@
   <form class="search big" method="get" role="search">
     {{template "icon" "search"}}<input type="search" name="q" value="{{.Query}}" placeholder="Name, company, email, phone…" aria-label="Filter contacts" data-filter=".people li" autocomplete="off" autofocus>
     {{if .Filter}}<input type="hidden" name="f" value="{{.Filter}}">{{end}}
+    {{if .Only}}<input type="hidden" name="g" value="{{.Only}}">{{end}}
   </form>
   <nav class="chips" aria-label="Filters">
-    <a class="chip{{if or (eq .Filter "") (eq .Filter "all")}} on{{end}}" href="?">All <b>{{.Counts.all}}</b></a>
+    <a class="chip{{if and (or (eq .Filter "") (eq .Filter "all")) (not .Only)}} on{{end}}" href="?">All <b>{{.Counts.all}}</b></a>
     <a class="chip{{if eq .Filter "photo"}} on{{end}}" href="?f=photo">With photo <b>{{.Counts.photo}}</b></a>
     <a class="chip{{if eq .Filter "nophoto"}} on{{end}}" href="?f=nophoto">No photo <b>{{.Counts.nophoto}}</b></a>
     <a class="chip warn{{if eq .Filter "lowres"}} on{{end}}" href="?f=lowres">Low-res photo <b>{{.Counts.lowres}}</b></a>
     <a class="chip bad{{if eq .Filter "errors"}} on{{end}}" href="?f=errors">Errors <b>{{.Counts.errors}}</b></a>
   </nav>
+  {{if .Tags}}<nav class="chips groups" aria-label="Groups">
+    {{range .Tags}}<a class="chip tag{{if eq $.Only .Name}} on{{end}}" href="?g={{.Name}}" dir="auto">{{template "icon" "users"}}{{.Name}} <b>{{.Count}}</b></a>{{end}}
+  </nav>{{end}}
 </div>
 
 {{if gt (len .Letters) 6}}<nav class="index" aria-label="Jump to letter">{{range .Letters}}<a href="#l-{{.}}">{{.}}</a>{{end}}</nav>{{end}}
@@ -28,6 +32,7 @@
     <li data-search="{{.Search}}"><a href="{{.File}}">
       {{template "avatar" .}}
       <span class="grow"><span class="name" dir="auto">{{.Name}}</span><span class="muted" dir="auto">{{if .Org}}{{.Org}}{{else if .Email}}{{.Email}}{{else}}{{.Phone}}{{end}}</span></span>
+      {{range .Groups}}<span class="chip tag" dir="auto">{{.}}</span>{{end}}
       {{if .Issues}}<span class="chip bad" title="{{.Issues}} error(s)">!</span>{{else if .LowRes}}<span class="chip warn" title="photo is {{.PhotoW}} px">{{.PhotoW}}px</span>{{end}}
     </a></li>
     {{end}}

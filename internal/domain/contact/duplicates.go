@@ -144,6 +144,12 @@ func duplicateKeys(entries []Entry, regions []string) ([]string, map[string][]in
 	}
 
 	for i, e := range entries {
+		// A group is not a contact: one named like a person is not that
+		// person, and merging the two would lose the group.
+		if IsGroup(e.Card) {
+			continue
+		}
+
 		for _, l := range e.Card.All("TEL") {
 			raw, _ := telNumber(l)
 			add(phoneKey(raw, regions), i)

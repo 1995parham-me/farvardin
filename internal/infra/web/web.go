@@ -233,6 +233,13 @@ type person struct {
 	LowRes   bool
 	PhotoW   int
 	Issues   int
+	UID      string
+	// IsGroup marks a group card; Members counts its members.
+	IsGroup bool
+	Members int
+	// Groups are the groups the contact is in: group cards naming it, and
+	// its own CATEGORIES.
+	Groups []string
 }
 
 func (h *Handler) people(book *store.Collection) ([]person, *store.Snapshot, error) {
@@ -246,6 +253,7 @@ func (h *Handler) people(book *store.Collection) ([]person, *store.Snapshot, err
 	}
 
 	out := make([]person, 0, len(snap.Objects))
+	memberOf := map[string][]string{}
 
 	for _, o := range snap.Objects {
 		p := person{
@@ -260,7 +268,18 @@ func (h *Handler) people(book *store.Collection) ([]person, *store.Snapshot, err
 			continue
 		}
 
-		p.Name, p.Org, p.Issues = card.DisplayName(), card.Organization(), 0
+		p.Name, p.Org, p.Issues, p.UID = card.DisplayName(), card.Organization(), 0, card.UID()
+
+		if contact.IsGroup(*card) {
+			p.IsGroup = true
+			p.Members = len(card.Members())
+
+			for _, uid := range card.Members() {
+				memberOf[uid] = append(memberOf[uid], p.Name)
+			}
+		} else {
+			p.Groups = card.Categories()
+		}
 
 		if e := card.Values("EMAIL"); len(e) > 0 {
 			p.Email = e[0].Value
@@ -292,6 +311,21 @@ func (h *Handler) people(book *store.Collection) ([]person, *store.Snapshot, err
 		out = append(out, p)
 	}
 
+	for i := range out {
+		if out[i].UID == "" || out[i].IsGroup {
+			continue
+		}
+
+		for _, g := range memberOf[out[i].UID] {
+			if !slices.Contains(out[i].Groups, g) {
+				out[i].Groups = append(out[i].Groups, g)
+			}
+		}
+
+		slices.SortFunc(out[i].Groups, func(a, b string) int { return strings.Compare(strings.ToLower(a), strings.ToLower(b)) })
+		out[i].Search += " " + strings.ToLower(strings.Join(out[i].Groups, " "))
+	}
+
 	sort.SliceStable(out, func(i, j int) bool { return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name) })
 	h.lists.put(book.Name(), snap.Token, out)
 
@@ -319,6 +353,45 @@ type group struct {
 	People []person
 }
 
+// tag is a contact group in the list's filter chips: a group card (File
+// set) or a category, and how many contacts are in it.
+type tag struct {
+	Name  string
+	File  string
+	Count int
+}
+
+// tagsOf lists every group of a contact list, by name: each group card,
+// even an empty one, and each category a contact carries.
+func tagsOf(all []person) []tag {
+	tags := map[string]*tag{}
+
+	for _, p := range all {
+		if p.IsGroup && tags[p.Name] == nil {
+			tags[p.Name] = &tag{Name: p.Name, File: p.File, Count: 0}
+		}
+	}
+
+	for _, p := range all {
+		for _, g := range p.Groups {
+			if tags[g] == nil {
+				tags[g] = &tag{Name: g, File: "", Count: 0}
+			}
+
+			tags[g].Count++
+		}
+	}
+
+	out := make([]tag, 0, len(tags))
+	for _, t := range tags {
+		out = append(out, *t)
+	}
+
+	sort.Slice(out, func(i, j int) bool { return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name) })
+
+	return out
+}
+
 func (h *Handler) contacts(w http.ResponseWriter, r *http.Request) {
 	book, err := h.store.Collection(store.AddressBook, r.PathValue("book"))
 	if err != nil {
@@ -335,13 +408,20 @@ func (h *Handler) contacts(w http.ResponseWriter, r *http.Request) {
 	}
 
 	filter := r.URL.Query().Get("f")
+	only := r.URL.Query().Get("g")
 	q := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("q")))
 	qd := phoneQuery(q)
-	counts := map[string]int{"all": len(all)}
+	// Group cards are chips above the list, not rows in it.
+	people := slices.DeleteFunc(slices.Clone(all), func(p person) bool { return p.IsGroup })
+	counts := map[string]int{"all": len(people)}
 
 	var shown []person
 
-	for _, p := range all {
+	for _, p := range people {
+		if only != "" && !slices.Contains(p.Groups, only) {
+			continue
+		}
+
 		counts[map[bool]string{true: "photo", false: "nophoto"}[p.HasPhoto]]++
 
 		if p.LowRes {
@@ -376,7 +456,7 @@ func (h *Handler) contacts(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.render(w, r, "contacts.html", map[string]any{
-		"Title": snap.Meta().DisplayName(), "Book": book.Name(), "Groups": groups, "Letters": letters,
+		"Title": snap.Meta().DisplayName(), "Book": book.Name(), "Groups": groups, "Letters": letters, "Tags": tagsOf(all), "Only": only,
 		"Shown": len(shown), "Counts": counts, "Filter": filter, "Query": r.URL.Query().Get("q"),
 		"Export": h.davPrefix + "/" + h.store.Principal() + "/contacts/" + book.Name() + "/",
 	})
@@ -431,10 +511,59 @@ func (h *Handler) contactPage(w http.ResponseWriter, r *http.Request) {
 	_, hasPhoto := card.Get("PHOTO")
 	_, phoneFixes := contact.FixPhones(*card, h.region)
 
+	var (
+		groups  []person
+		members []person
+		lost    int
+	)
+
+	if all, _, err := h.people(book); err == nil {
+		byUID := map[string]person{}
+		byName := map[string]person{}
+
+		var self person
+
+		for _, p := range all {
+			if p.UID != "" {
+				byUID[p.UID] = p
+			}
+
+			if p.IsGroup {
+				byName[p.Name] = p
+			}
+
+			if p.File == name {
+				self = p
+			}
+		}
+
+		for _, g := range self.Groups {
+			gp, ok := byName[g]
+			if !ok {
+				gp = person{Name: g} //nolint:exhaustruct // a category has no card
+			}
+
+			groups = append(groups, gp)
+		}
+
+		if contact.IsGroup(*card) {
+			for _, uid := range card.Members() {
+				if m, ok := byUID[uid]; ok {
+					members = append(members, m)
+				} else {
+					lost++
+				}
+			}
+
+			sort.SliceStable(members, func(i, j int) bool { return strings.ToLower(members[i].Name) < strings.ToLower(members[j].Name) })
+		}
+	}
+
 	h.render(w, r, "contact.html", map[string]any{
 		"Title": card.DisplayName(), "Book": book.Name(), "File": name, "Card": card, "Fields": fields(*card, h.region),
 		"Org": strings.Join(nonEmpty(orgParts(*card)), " · "), "JobTitle": card.Value("TITLE"),
 		"Issues": contact.Lint(*card, h.region), "PhoneFixes": phoneFixes, "PhonesFixed": r.URL.Query().Get("phones"), "Timeline": h.timeline(book, revs), "Photos": h.photoHistory(book, *card, revs),
+		"IsGroup": contact.IsGroup(*card), "Groups": groups, "Members": members, "Lost": lost,
 		"Object": obj, "HasPhoto": hasPhoto, "PhotoInfo": photoInfo, "Version": card.Version(), "CanWrite": h.write != nil,
 		"Restored": r.URL.Query().Get("restored") != "", "Failed": r.URL.Query().Get("error"),
 		"Back": r.URL.Query().Get("back") != "", "VersionRestored": r.URL.Query().Get("version") != "", "Merged": r.URL.Query().Get("merged"),

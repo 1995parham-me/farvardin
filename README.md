@@ -47,6 +47,7 @@ Your phones sync contacts and calendars over CardDAV and CalDAV, and the server 
 - **Phone numbers**: with `phone_region` set to one country or a list (`["IR", "ES"]`), lint suggests the E.164 form of numbers without a country code and fixes them on request; search finds a number however it is written
 - **Duplicates**: cards that share a number, an email or a name are grouped and can be merged into one, or marked as different contacts; a company and its people are never grouped by a shared number or email
 - **Undelete**: every deleted contact can be restored, and any card can go back to an earlier version
+- **Groups**: group cards (`X-ADDRESSBOOKSERVER-KIND:group`, what iOS writes and what DAVx5 turns into Android contact groups) and `CATEGORIES` are both read; the web UI filters by group and lists each group's members, and MCP creates and edits group cards
 
 </td>
 <td width="33%" valign="top">
@@ -89,7 +90,7 @@ Your phones sync contacts and calendars over CardDAV and CalDAV, and the server 
 
 ### 🤖 MCP
 
-- A [Model Context Protocol](https://modelcontextprotocol.io) endpoint with 22 tools
+- A [Model Context Protocol](https://modelcontextprotocol.io) endpoint with 28 tools
 - Search, read, create, update and delete contacts and events
 - History, photo restore, birthdays, lint
 - Duplicates and merge, undelete, fix every phone number at once
@@ -192,6 +193,7 @@ claude mcp add --transport http farvardin https://dav.example.com/mcp \
 | `search_contacts` · `get_contact` · `create_contact` · `update_contact` · `delete_contact` | `list_calendars` · `list_events` · `get_event` |
 | `contact_history` · `restore_contact_photo` · `upcoming_birthdays` · `lint_contacts` · `fix_contact_phones` · `fix_all_contact_phones` | `create_event` · `update_event` · `delete_event` |
 | `find_duplicate_contacts` · `merge_contacts` · `mark_not_duplicates` · `list_deleted_contacts` · `restore_contact` | |
+| `list_groups` · `create_group` · `add_to_group` · `remove_from_group` · `rename_group` · `delete_group` | |
 
 Writes take the etag that was read, so an assistant never overwrites a newer edit from a phone. They go through the same validation as a phone's write, are pushed to the phones at once, and are git commits with `Requester: farvardin MCP (<token>)`, so every change can be seen and undone. The config keeps only each token's SHA-256.
 

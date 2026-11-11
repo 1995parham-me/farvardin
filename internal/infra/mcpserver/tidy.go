@@ -141,7 +141,7 @@ func (t tools) mergeContacts(_ context.Context, req *mcp.CallToolRequest, in Mer
 		return nil, MergeOut{}, err
 	}
 
-	return nil, MergeOut{ContactDetail: detail(book.Name(), obj, *stored, t.b.PhoneRegion), Merged: res.Merged, Failed: res.Failed}, nil
+	return nil, MergeOut{ContactDetail: t.detail(book.Name(), obj, *stored), Merged: res.Merged, Failed: res.Failed}, nil
 }
 
 // DeletedContact is one deleted contact.
@@ -222,7 +222,7 @@ func (t tools) restoreContact(_ context.Context, req *mcp.CallToolRequest, in Re
 		return nil, ContactDetail{}, err
 	}
 
-	return nil, detail(book.Name(), obj, *stored, t.b.PhoneRegion), nil
+	return nil, t.detail(book.Name(), obj, *stored), nil
 }
 
 // FixAllOut reports fix_all_contact_phones.

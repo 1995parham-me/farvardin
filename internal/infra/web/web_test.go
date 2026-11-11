@@ -450,3 +450,48 @@ func TestTidy(t *testing.T) {
 		t.Fatalf("cross-site post: %d", resp.StatusCode)
 	}
 }
+
+func TestGroups(t *testing.T) {
+	t.Parallel()
+
+	srv, c, book := setup(t)
+
+	const (
+		bob   = "BEGIN:VCARD\r\nVERSION:3.0\r\nUID:bob\r\nFN:Bob Builder\r\nN:Builder;Bob;;;\r\nCATEGORIES:Neighbours\r\nEND:VCARD\r\n"
+		group = "BEGIN:VCARD\r\nVERSION:3.0\r\nUID:g1\r\nFN:Home Services\r\nN:Home Services;;;;\r\nX-ADDRESSBOOKSERVER-KIND:group\r\n" +
+			"X-ADDRESSBOOKSERVER-MEMBER:urn:uuid:bob\r\nX-ADDRESSBOOKSERVER-MEMBER:urn:uuid:gone\r\nEND:VCARD\r\n"
+	)
+
+	for name, data := range map[string]string{"bob.vcf": bob, "g1.vcf": group} {
+		if _, _, err := book.Put(name, []byte(data), store.Condition{}, "DAVx5/4.5.10-ose (at.bitfire.davdroid)"); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	resp, err := c.PostForm(srv.URL+"/ui/login", url.Values{"username": {"parham"}, "password": {"s3cret"}, "next": {"/ui/"}}) //nolint:noctx // test
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_ = resp.Body.Close()
+
+	_, list := get(t, c, srv.URL+"/ui/contacts/addressbook/")
+	if !strings.Contains(list, `href="?g=Home%20Services"`) || !strings.Contains(list, "Neighbours") || strings.Contains(list, `href="g1.vcf"`) {
+		t.Fatalf("list must chip the groups and not list the group card:\n%s", list)
+	}
+
+	_, only := get(t, c, srv.URL+"/ui/contacts/addressbook/?g=Home+Services")
+	if !strings.Contains(only, "Bob Builder") || strings.Contains(only, "Alice Example") {
+		t.Fatalf("group filter:\n%s", only)
+	}
+
+	_, page := get(t, c, srv.URL+"/ui/contacts/addressbook/g1.vcf")
+	if !strings.Contains(page, "Members") || !strings.Contains(page, `href="bob.vcf"`) || !strings.Contains(page, "1 member(s) no longer have a card") {
+		t.Fatalf("group page:\n%s", page)
+	}
+
+	_, bobPage := get(t, c, srv.URL+"/ui/contacts/addressbook/bob.vcf")
+	if !strings.Contains(bobPage, `href="g1.vcf"`) || !strings.Contains(bobPage, "Neighbours") {
+		t.Fatalf("contact page groups:\n%s", bobPage)
+	}
+}

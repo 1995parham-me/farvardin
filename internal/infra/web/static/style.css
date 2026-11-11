@@ -150,6 +150,11 @@ a.chip:hover { color: var(--text); border-color: var(--faint); }
 .count { font: 500 1rem var(--mono); color: var(--green); vertical-align: middle; margin-left: .3rem; }
 .toolbar { display: flex; flex-direction: column; gap: .75rem; margin-bottom: 1rem; }
 .chips { display: flex; gap: .45rem; flex-wrap: wrap; }
+.chips.groups { margin-top: .5rem; }
+.chip.tag { color: var(--blue); border-color: color-mix(in srgb, var(--blue) 40%, var(--line)); }
+.chip.tag .icon { width: .95rem; height: .95rem; }
+.chip.tag.on { background: var(--blue); border-color: var(--blue); color: var(--surface); }
+.people .chip.tag { font-size: .72rem; padding: .05rem .5rem; }
 .index { position: sticky; top: 64px; z-index: 2; display: flex; flex-wrap: wrap; gap: .15rem; padding: .4rem 0; margin-bottom: .5rem; background: var(--bg); }
 .index a { min-width: 1.8rem; text-align: center; padding: .1rem .3rem; border-radius: 6px; font: 600 .8rem var(--mono); color: var(--muted); }
 .index a:hover { background: var(--raised); color: var(--yellow); }

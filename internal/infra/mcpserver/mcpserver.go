@@ -133,7 +133,7 @@ func (t tools) register(s *mcp.Server) {
 		return &mcp.Tool{Name: name, Description: desc, Annotations: ann} //nolint:exhaustruct // schemas come from the Go types
 	}
 
-	mcp.AddTool(s, tool("search_contacts", "Find contacts by name, nickname, organization, email or phone (any part; phone digits match regardless of formatting). Returns summaries with ids.", readOnly()), t.searchContacts)
+	mcp.AddTool(s, tool("search_contacts", "Find contacts by name, nickname, organization, email or phone (any part; phone digits match regardless of formatting), optionally only the members of one group. Returns summaries with ids and each contact's groups. Group cards are not listed; list_groups does that.", readOnly()), t.searchContacts)
 	mcp.AddTool(s, tool("get_contact", "Read one contact by id: every field, and optionally the raw vCard (3.0 as stored, or converted to 4.0) or JSContact.", readOnly()), t.getContact)
 	mcp.AddTool(s, tool("create_contact", "Create a contact. Search first to avoid a duplicate.", writes(false)), t.createContact)
 	mcp.AddTool(s, tool("update_contact", "Change fields of a contact. Only the fields you pass change; a list field you pass (phones, emails, urls) replaces the whole list. Pass the etag from get_contact to avoid overwriting a newer edit from a phone.", writes(false)), t.updateContact)
@@ -142,6 +142,7 @@ func (t tools) register(s *mcp.Server) {
 	mcp.AddTool(s, tool("restore_contact_photo", "Put back the photo a contact had at an earlier revision (from contact_history), for example a full photo a phone replaced with a thumbnail.", writes(false)), t.restorePhoto)
 	mcp.AddTool(s, tool("fix_contact_phones", "Write a contact's phone numbers that have no country code in international (E.164) form, the fixes lint_contacts suggests. Labels and every other field stay as they are. Pass the etag you read.", writes(false)), t.fixPhones)
 	t.registerTidy(s, tool)
+	t.registerGroups(s, tool)
 	mcp.AddTool(s, tool("upcoming_birthdays", "Birthdays and anniversaries in the next N days, with ages where the year is known.", readOnly()), t.upcomingBirthdays)
 	mcp.AddTool(s, tool("lint_contacts", "List contacts that fail validation (errors stop phones from saving them) or have warnings (phone numbers not in international form, repeated numbers, and more), and contacts with low-resolution photos. A warning with a fix can be applied with fix_contact_phones, or all at once with fix_all_contact_phones.", readOnly()), t.lintContacts)
 	mcp.AddTool(s, tool("list_calendars", "List the calendars, including the generated read-only birthdays calendar.", readOnly()), t.listCalendars)
@@ -170,6 +171,7 @@ type ContactSummary struct {
 	Emails       []string `json:"emails,omitempty"`
 	Birthday     string   `json:"birthday,omitempty"`
 	Photo        string   `json:"photo,omitempty"`
+	Groups       []string `json:"groups,omitempty"`
 	ETag         string   `json:"etag"`
 }
 
@@ -191,8 +193,8 @@ func (t tools) book(name string) (*store.Collection, error) {
 	return books[0], nil
 }
 
-func summarize(book string, id, etag string, c contact.Card) ContactSummary {
-	s := ContactSummary{ID: id, Book: book, Name: c.DisplayName(), Organization: c.Organization(), Phones: nil, Emails: nil, Birthday: "", Photo: "", ETag: etag}
+func summarize(book string, id, etag string, c contact.Card, groups []string) ContactSummary {
+	s := ContactSummary{ID: id, Book: book, Name: c.DisplayName(), Organization: c.Organization(), Phones: nil, Emails: nil, Birthday: "", Photo: "", Groups: groups, ETag: etag}
 
 	for _, v := range c.Values("TEL") {
 		s.Phones = append(s.Phones, v.Value)
@@ -237,6 +239,7 @@ func digits(s string) string {
 type SearchIn struct {
 	Query string `json:"query"           jsonschema:"text to look for; empty lists everyone"`
 	Limit int    `json:"limit,omitempty" jsonschema:"at most this many results (default 20)"`
+	Group string `json:"group,omitempty" jsonschema:"only the members of this group (its name or id), or of this category"`
 	Book  string `json:"book,omitempty"  jsonschema:"address book name; default the first"`
 }
 
@@ -247,14 +250,20 @@ type SearchOut struct {
 }
 
 func (t tools) searchContacts(_ context.Context, _ *mcp.CallToolRequest, in SearchIn) (*mcp.CallToolResult, SearchOut, error) {
-	book, err := t.book(in.Book)
+	gi, err := t.groups(in.Book)
 	if err != nil {
 		return nil, SearchOut{}, err
 	}
 
-	snap, err := book.Snapshot()
-	if err != nil {
-		return nil, SearchOut{}, fmt.Errorf("reading the address book: %w", err)
+	book, snap := gi.book, gi.snap
+
+	only := strings.TrimSpace(in.Group)
+	if only != "" {
+		if g, err := gi.find(only); err == nil {
+			only = g.name
+		} else if gi.categories[only] == 0 {
+			return nil, SearchOut{}, err
+		}
 	}
 
 	limit := in.Limit
@@ -267,8 +276,12 @@ func (t tools) searchContacts(_ context.Context, _ *mcp.CallToolRequest, in Sear
 	out := SearchOut{Contacts: nil, Total: 0}
 
 	for _, o := range snap.Objects {
-		c, _, err := t.b.Parse(book, o.ETag)
-		if err != nil || c == nil {
+		c, ok := gi.cards[o.Name]
+		if !ok || contact.IsGroup(*c) {
+			continue
+		}
+
+		if only != "" && !slices.ContainsFunc(gi.of(*c), func(g string) bool { return strings.EqualFold(g, only) }) {
 			continue
 		}
 
@@ -293,7 +306,7 @@ func (t tools) searchContacts(_ context.Context, _ *mcp.CallToolRequest, in Sear
 
 		out.Total++
 		if len(out.Contacts) < limit {
-			out.Contacts = append(out.Contacts, summarize(book.Name(), o.Name, o.ETag, *c))
+			out.Contacts = append(out.Contacts, summarize(book.Name(), o.Name, o.ETag, *c, gi.of(*c)))
 		}
 	}
 
@@ -368,10 +381,17 @@ func (t tools) load(bookName, id string) (*store.Collection, store.Object, *cont
 	return book, obj, c, nil
 }
 
-func detail(book string, obj store.Object, c contact.Card, region []string) ContactDetail {
+// detail is a whole contact with the groups it is in.
+func (t tools) detail(book string, obj store.Object, c contact.Card) ContactDetail {
+	var groups []string
+	if gi, err := t.groups(book); err == nil {
+		groups = gi.of(c)
+	}
+
+	region := t.b.PhoneRegion
 	n := c.Name()
 	d := ContactDetail{
-		ContactSummary: summarize(book, obj.Name, obj.ETag, c),
+		ContactSummary: summarize(book, obj.Name, obj.ETag, c, groups),
 		GivenName:      n.Given, FamilyName: n.Family, Nickname: c.Value("NICKNAME"), Title: c.Value("TITLE"), Note: c.Value("NOTE"),
 		PhonesFull: labelled(c.Values("TEL")), EmailsFull: labelled(c.Values("EMAIL")), URLs: labelled(c.Values("URL")),
 		Addresses: labelled(c.Values("ADR")), Dates: nil, Issues: nil, Data: "",
@@ -399,7 +419,7 @@ func (t tools) getContact(_ context.Context, _ *mcp.CallToolRequest, in GetConta
 		return nil, ContactDetail{}, err
 	}
 
-	d := detail(book.Name(), obj, *c, t.b.PhoneRegion)
+	d := t.detail(book.Name(), obj, *c)
 
 	switch strings.ToLower(in.Format) {
 	case "":
@@ -571,7 +591,7 @@ func (t tools) createContact(_ context.Context, req *mcp.CallToolRequest, in Cre
 		return nil, ContactDetail{}, err
 	}
 
-	return nil, detail(book.Name(), obj, *stored, t.b.PhoneRegion), nil
+	return nil, t.detail(book.Name(), obj, *stored), nil
 }
 
 func newUID() string {
@@ -627,7 +647,7 @@ func (t tools) updateContact(_ context.Context, req *mcp.CallToolRequest, in Upd
 		return nil, ContactDetail{}, err
 	}
 
-	return nil, detail(book.Name(), obj, *stored, t.b.PhoneRegion), nil
+	return nil, t.detail(book.Name(), obj, *stored), nil
 }
 
 // DeleteIn deletes one object.
@@ -753,7 +773,7 @@ func (t tools) restorePhoto(_ context.Context, req *mcp.CallToolRequest, in Rest
 		return nil, ContactDetail{}, err
 	}
 
-	return nil, detail(book.Name(), obj, *stored, t.b.PhoneRegion), nil
+	return nil, t.detail(book.Name(), obj, *stored), nil
 }
 
 // FixPhonesIn is the input of fix_contact_phones.
@@ -789,7 +809,7 @@ func (t tools) fixPhones(_ context.Context, req *mcp.CallToolRequest, in FixPhon
 
 	fixed, fixes := contact.FixPhones(*cur, t.b.PhoneRegion)
 	if len(fixes) == 0 {
-		return nil, FixPhonesOut{ContactDetail: detail(book.Name(), obj, *cur, t.b.PhoneRegion), Fixed: nil}, nil
+		return nil, FixPhonesOut{ContactDetail: t.detail(book.Name(), obj, *cur), Fixed: nil}, nil
 	}
 
 	if _, err := t.b.WriteCard(book.Name(), in.ID, fixed.Encode(), ifMatch, requester(req)); err != nil {
@@ -801,7 +821,7 @@ func (t tools) fixPhones(_ context.Context, req *mcp.CallToolRequest, in FixPhon
 		return nil, FixPhonesOut{}, err
 	}
 
-	return nil, FixPhonesOut{ContactDetail: detail(book.Name(), obj, *stored, t.b.PhoneRegion), Fixed: fixes}, nil
+	return nil, FixPhonesOut{ContactDetail: t.detail(book.Name(), obj, *stored), Fixed: fixes}, nil
 }
 
 // BirthdaysIn is the input of upcoming_birthdays.
