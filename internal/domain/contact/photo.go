@@ -210,7 +210,7 @@ func dropSpace(r rune) rune {
 // server, or nil for a new card. It returns the card to store and what
 // was done.
 func ApplyPhotoPolicy(incoming Card, stored *Card, policy PhotoPolicy) (Card, PhotoAction) {
-	fitted, changed := fitCard(incoming)
+	fitted, changed := FitBinary(incoming)
 
 	out, action := applyPhotoPolicy(fitted, stored, policy)
 	if action == PhotoUnchanged && changed {
@@ -240,7 +240,9 @@ func applyPhotoPolicy(incoming Card, stored *Card, policy PhotoPolicy) (Card, Ph
 				}
 
 				if policy.Stabilize && samePicture(in, old) {
-					if incoming.Lines[idx].Value == stored.Lines[sidx].Value {
+					// Compare the decoded bytes: the same photo is plain
+					// base64 in a 3.0 card and a data: URI in a 4.0 one.
+					if bytes.Equal(in.Data, old.Data) {
 						return incoming, PhotoUnchanged
 					}
 

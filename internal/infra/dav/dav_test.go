@@ -17,6 +17,7 @@ import (
 type client struct {
 	t   *testing.T
 	srv *httptest.Server
+	h   *dav.Handler
 }
 
 func newClient(t *testing.T) *client {
@@ -40,7 +41,7 @@ func newClient(t *testing.T) *client {
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
 
-	return &client{t: t, srv: srv}
+	return &client{t: t, srv: srv, h: h}
 }
 
 func (c *client) do(method, path, body string, headers ...string) (int, http.Header, string) {
@@ -251,4 +252,33 @@ func TestHrefsAreEscapedLikeXandikos(t *testing.T) {
 
 	st, _, body = c.do("GET", cal+"x@google.com.ics", "")
 	expect(t, "unescaped request path", st, http.StatusOK, body)
+}
+
+// A write from the web UI or MCP skips the photo policy, but a photo
+// written the vCard 3.0 way inside a 4.0 card is still rewritten as a
+// data: URI, which is the only form DAVx5 reads in 4.0.
+func TestWriteCardFitsPhotoToVersion(t *testing.T) {
+	t.Parallel()
+
+	c := newClient(t)
+
+	// A 1x1 GIF is enough: the line form is what is checked.
+	const gif = "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
+
+	broken := "BEGIN:VCARD\r\nVERSION:4.0\r\nUID:mixed\r\nFN:Mixed\r\n" +
+		"PHOTO;ENCODING=b;TYPE=GIF:" + gif + "\r\nEND:VCARD\r\n"
+
+	if _, err := c.h.WriteCard("addressbook", "mixed.vcf", []byte(broken), "", "test"); err != nil {
+		t.Fatal(err)
+	}
+
+	st, _, body := c.do("GET", "/user/contacts/addressbook/mixed.vcf", "")
+	expect(t, "get", st, http.StatusOK, body)
+
+	body = strings.ReplaceAll(body, "\r\n ", "") // unfold
+	mustContain(t, "fitted photo", body, "PHOTO:data:image/gif;base64,"+gif)
+
+	if strings.Contains(body, "ENCODING=") {
+		t.Fatalf("4.0 card still has ENCODING:\n%s", body)
+	}
 }

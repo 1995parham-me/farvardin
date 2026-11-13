@@ -93,6 +93,20 @@ func Validate(c Card) []Issue {
 		add(Warning, "more than one PHOTO")
 	}
 
+	// A binary line in the other version's form: clients such as DAVx5
+	// read a 3.0 ENCODING=b line in a 4.0 card as a URL and drop it.
+	// Only a warning, so a phone's write is repaired (FitBinary), not
+	// refused.
+	for _, l := range c.Lines {
+		if _, mismatched := fitBinary(l, c.Version()); mismatched {
+			if c.Version() == V4 {
+				add(Warning, "%s is written the vCard 3.0 way (ENCODING=b) in a 4.0 card; it must be a data: URI", l.Name)
+			} else {
+				add(Warning, "%s is a data: URI in a 3.0 card; it must be ENCODING=b", l.Name)
+			}
+		}
+	}
+
 	return issues
 }
 

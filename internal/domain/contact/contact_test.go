@@ -285,7 +285,7 @@ func TestPhotoPolicyAcrossVersions(t *testing.T) {
 
 	// A card already right is left byte for byte.
 	ok := withPhoto4(jpegOf(t, 300, 300, 100, 90))
-	if got := contact.FitBinary(mustParse(t, ok)).Encode(); string(got) != ok {
+	if got, changed := contact.FitBinary(mustParse(t, ok)); changed || string(got.Encode()) != ok {
 		t.Fatal("FitBinary changed a 4.0 card that was already right")
 	}
 }
@@ -334,5 +334,60 @@ func TestEncodeKeepsUntouchedBytes(t *testing.T) {
 	out := string(c.Encode())
 	if !strings.Contains(out, strings.Repeat("Q", 300)) || !strings.Contains(out, "FN:Changed\r\n") {
 		t.Fatalf("edit touched other lines:\n%s", out)
+	}
+}
+
+// The same photo bytes, as plain base64 in a stored 3.0 card and as a
+// data: URI in an incoming 4.0 one, are not a change: the upload is kept
+// as it is (and its ETag returned), not "stabilized" into a new body.
+func TestStabilizeComparesDecodedBytes(t *testing.T) {
+	t.Parallel()
+
+	policy := contact.PhotoPolicy{MaxSize: 720, Guard: true, Stabilize: true, ThumbnailSize: 128, Quality: 85}
+
+	data := jpegOf(t, 300, 300, 100, 90)
+	stored := mustParse(t, withPhoto(data))
+	in := mustParse(t, withPhoto4(data))
+
+	if _, action := contact.ApplyPhotoPolicy(in, &stored, policy); action != contact.PhotoUnchanged {
+		t.Fatalf("same bytes across versions: action %q", action)
+	}
+}
+
+func TestValidateWarnsOnPhotoInOtherVersionForm(t *testing.T) {
+	t.Parallel()
+
+	data := jpegOf(t, 64, 64, 100, 90)
+
+	cases := map[string]string{
+		"3.0 line in 4.0":  strings.Replace(withPhoto(data), "VERSION:3.0", "VERSION:4.0", 1),
+		"data: URI in 3.0": strings.Replace(withPhoto4(data), "VERSION:4.0", "VERSION:3.0", 1),
+	}
+
+	for name, card := range cases {
+		issues := contact.Validate(mustParse(t, card))
+		if contact.HasErrors(issues) {
+			t.Fatalf("%s: must warn, not refuse: %v", name, issues)
+		}
+
+		found := false
+
+		for _, i := range issues {
+			if i.Severity == contact.Warning && strings.HasPrefix(i.Message, "PHOTO ") {
+				found = true
+			}
+		}
+
+		if !found {
+			t.Fatalf("%s: no PHOTO warning in %v", name, issues)
+		}
+	}
+
+	for name, card := range map[string]string{"3.0": withPhoto(data), "4.0": withPhoto4(data)} {
+		for _, i := range contact.Validate(mustParse(t, card)) {
+			if strings.HasPrefix(i.Message, "PHOTO ") {
+				t.Fatalf("correct %s card warned: %v", name, i)
+			}
+		}
 	}
 }

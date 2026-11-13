@@ -197,15 +197,10 @@ func fitBinary(l vcf.Line, version string) (vcf.Line, bool) {
 }
 
 // FitBinary returns c with every inline binary line written the way the
-// card's VERSION wants it (see fitBinary). A card with nothing to change
-// is returned as it is, so its lines keep their bytes.
-func FitBinary(c Card) Card {
-	out, _ := fitCard(c)
-
-	return out
-}
-
-func fitCard(c Card) (Card, bool) {
+// card's VERSION wants it (see fitBinary), and whether anything changed.
+// A card with nothing to change is returned as it is, so its lines keep
+// their bytes.
+func FitBinary(c Card) (Card, bool) {
 	var out *Card
 
 	for i, l := range c.Lines {

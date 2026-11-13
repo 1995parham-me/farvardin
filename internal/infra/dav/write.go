@@ -40,6 +40,14 @@ func (h *Handler) WriteCard(book, name string, data []byte, ifMatch, requester s
 		return "", fmt.Errorf("%w: %s", ErrInvalidCard, strings.Join(msgs, "; "))
 	}
 
+	// The UI and MCP write a photo on purpose, so the photo policy is not
+	// applied, but a binary line in the other version's form is still
+	// rewritten: DAVx5 drops a 3.0 photo line in a 4.0 card.
+	if fitted, changed := contact.FitBinary(card); changed {
+		card = fitted
+		data = fitted.Encode()
+	}
+
 	snap, err := col.Snapshot()
 	if err != nil {
 		return "", fmt.Errorf("reading %s: %w", book, err)
