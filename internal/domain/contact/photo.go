@@ -146,6 +146,9 @@ const (
 	PhotoScaled     PhotoAction = "scaled"
 	PhotoGuarded    PhotoAction = "guarded"
 	PhotoStabilized PhotoAction = "stabilized"
+	// PhotoFitted: the photo line was rewritten in the form of the card's
+	// VERSION (a 3.0 ENCODING=b line in a 4.0 card, or the reverse).
+	PhotoFitted PhotoAction = "fitted"
 )
 
 // Photo decodes the first inline PHOTO of the card.
@@ -207,6 +210,17 @@ func dropSpace(r rune) rune {
 // server, or nil for a new card. It returns the card to store and what
 // was done.
 func ApplyPhotoPolicy(incoming Card, stored *Card, policy PhotoPolicy) (Card, PhotoAction) {
+	fitted, changed := fitCard(incoming)
+
+	out, action := applyPhotoPolicy(fitted, stored, policy)
+	if action == PhotoUnchanged && changed {
+		action = PhotoFitted
+	}
+
+	return out, action
+}
+
+func applyPhotoPolicy(incoming Card, stored *Card, policy PhotoPolicy) (Card, PhotoAction) {
 	idx := slicesIndex(incoming.Lines, "PHOTO")
 	if idx < 0 {
 		return incoming, PhotoUnchanged
@@ -243,7 +257,7 @@ func ApplyPhotoPolicy(incoming Card, stored *Card, policy PhotoPolicy) (Card, Ph
 			l := &out.Lines[idx]
 
 			encoded := base64.StdEncoding.EncodeToString(scaled)
-			if strings.HasPrefix(l.Value, "data:") {
+			if out.Version() == V4 {
 				l.Value = "data:image/jpeg;base64," + encoded
 			} else {
 				l.Value = encoded
@@ -260,8 +274,12 @@ func ApplyPhotoPolicy(incoming Card, stored *Card, policy PhotoPolicy) (Card, Ph
 	return incoming, PhotoUnchanged
 }
 
+// replacePhoto puts photo (a line from another revision, which may be in
+// the other vCard version) in place of line idx of c, written the way c's
+// VERSION wants it.
 func replacePhoto(c Card, idx int, photo vcf.Line) Card {
 	out := c.Clone()
+	photo, _ = fitBinary(photo, out.Version())
 	photo.Group = out.Lines[idx].Group
 	out.Lines[idx] = photo
 
@@ -400,6 +418,8 @@ func WithPhotoOf(cur, from Card) Card {
 
 	for _, l := range from.Lines {
 		if photoLines[l.Name] {
+			// from may be in the other vCard version.
+			l, _ = fitBinary(l, cur.Version())
 			photo = append(photo, l)
 		}
 	}

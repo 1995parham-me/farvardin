@@ -90,13 +90,7 @@ func to4(c Card, l vcf.Line) (vcf.Line, bool) {
 
 	switch {
 	case slices.Contains(binaryProps, l.Name):
-		enc := strings.ToLower(firstParam(l.Param("ENCODING")))
-		if enc == "b" || enc == "base64" {
-			media := mediaType(l.Name, firstParam(l.Param("TYPE")))
-			l.Value = "data:" + media + ";base64," + l.Value
-			l.SetParam("ENCODING")
-			l.SetParam("TYPE")
-		}
+		l, _ = fitBinary(l, V4)
 	case l.Name == "SOCIALPROFILE":
 		if t := l.Param("TYPE"); len(t) > 0 {
 			l.SetParam("SERVICE-TYPE", t...)
@@ -145,12 +139,7 @@ func to3(l vcf.Line) (vcf.Line, bool) {
 
 	switch {
 	case slices.Contains(binaryProps, l.Name):
-		if media, data, ok := splitDataURI(l.Value); ok {
-			l.Value = data
-			l.SetParam("ENCODING", "b")
-			l.SetParam("TYPE", strings.ToUpper(strings.TrimPrefix(media[strings.IndexByte(media, '/')+1:], "x-")))
-			l.SetParam("MEDIATYPE")
-		}
+		l, _ = fitBinary(l, V3)
 	case l.Name == "X-SOCIALPROFILE":
 		if t := l.Param("SERVICE-TYPE"); len(t) > 0 {
 			l.SetParam("TYPE", t...)
@@ -165,6 +154,79 @@ func to3(l vcf.Line) (vcf.Line, bool) {
 	}
 
 	return l, true
+}
+
+// fitBinary writes an inline binary line (PHOTO, LOGO, SOUND, KEY) the way
+// version wants it: ENCODING=b with a TYPE in 3.0, a data: URI in 4.0. A
+// line already in that form, or not binary, comes back unchanged and false.
+// A 3.0 photo line left in a 4.0 card is read as a URL by clients such as
+// DAVx5, which then drop the photo.
+func fitBinary(l vcf.Line, version string) (vcf.Line, bool) {
+	if !slices.Contains(binaryProps, l.Name) {
+		return l, false
+	}
+
+	l.Params = slices.Clone(l.Params)
+
+	switch version {
+	case V4:
+		enc := strings.ToLower(firstParam(l.Param("ENCODING")))
+		if enc != "b" && enc != "base64" {
+			return l, false
+		}
+
+		media := mediaType(l.Name, firstParam(l.Param("TYPE")))
+		l.Value = "data:" + media + ";base64," + strings.Map(dropSpace, l.Value)
+		l.SetParam("ENCODING")
+		l.SetParam("TYPE")
+	case V3:
+		media, data, ok := splitDataURI(l.Value)
+		if !ok {
+			return l, false
+		}
+
+		l.Value = data
+		l.SetParam("ENCODING", "b")
+		l.SetParam("TYPE", strings.ToUpper(strings.TrimPrefix(media[strings.IndexByte(media, '/')+1:], "x-")))
+		l.SetParam("MEDIATYPE")
+	default:
+		return l, false
+	}
+
+	return l, true
+}
+
+// FitBinary returns c with every inline binary line written the way the
+// card's VERSION wants it (see fitBinary). A card with nothing to change
+// is returned as it is, so its lines keep their bytes.
+func FitBinary(c Card) Card {
+	out, _ := fitCard(c)
+
+	return out
+}
+
+func fitCard(c Card) (Card, bool) {
+	var out *Card
+
+	for i, l := range c.Lines {
+		fixed, changed := fitBinary(l, c.Version())
+		if !changed {
+			continue
+		}
+
+		if out == nil {
+			cl := c.Clone()
+			out = &cl
+		}
+
+		out.Lines[i] = fixed
+	}
+
+	if out == nil {
+		return c, false
+	}
+
+	return *out, true
 }
 
 func mediaType(prop, typ string) string {

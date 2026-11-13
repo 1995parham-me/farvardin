@@ -200,6 +200,107 @@ func TestPhotoPolicy(t *testing.T) {
 	}
 }
 
+func withPhoto4(data string) string {
+	return "BEGIN:VCARD\r\nVERSION:4.0\r\nUID:p\r\nFN:P\r\nPHOTO:data:image/jpeg;base64," + data + "\r\nEND:VCARD\r\n"
+}
+
+// assertPhotoFits fails unless the card's PHOTO is written the way its
+// VERSION wants it: a data: URI in 4.0, ENCODING=b in 3.0.
+func assertPhotoFits(t *testing.T, what string, c contact.Card) {
+	t.Helper()
+
+	l, ok := c.Get("PHOTO")
+	if !ok {
+		t.Fatalf("%s: no PHOTO", what)
+	}
+
+	isURI := strings.HasPrefix(l.Value, "data:image/jpeg;base64,")
+	hasEnc := len(l.Param("ENCODING")) > 0
+
+	switch c.Version() {
+	case contact.V4:
+		if !isURI || hasEnc {
+			t.Fatalf("%s: 4.0 card has PHOTO %v:%.40s", what, l.Params, l.Value)
+		}
+	case contact.V3:
+		if isURI || !hasEnc {
+			t.Fatalf("%s: 3.0 card has PHOTO %v:%.40s", what, l.Params, l.Value)
+		}
+	}
+
+	if _, err := c.Photo(); err != nil {
+		t.Fatalf("%s: photo does not decode: %v", what, err)
+	}
+}
+
+// A phone that moves a card from 3.0 to 4.0 must not get the stored 3.0
+// photo line back inside its 4.0 card: DAVx5 reads such a line as a URL
+// and drops the photo.
+func TestPhotoPolicyAcrossVersions(t *testing.T) {
+	t.Parallel()
+
+	policy := contact.PhotoPolicy{MaxSize: 720, Guard: true, Stabilize: true, ThumbnailSize: 128, Quality: 85}
+
+	big3 := mustParse(t, withPhoto(jpegOf(t, 720, 720, 100, 90)))
+	big4 := mustParse(t, withPhoto4(jpegOf(t, 720, 720, 100, 90)))
+
+	// Stabilized: the same picture, re-encoded, uploaded as 4.0.
+	out, action := contact.ApplyPhotoPolicy(mustParse(t, withPhoto4(jpegOf(t, 720, 720, 100, 70))), &big3, policy)
+	if action != contact.PhotoStabilized {
+		t.Fatalf("stabilize 3→4: action %q", action)
+	}
+
+	assertPhotoFits(t, "stabilize 3→4", out)
+
+	// Guarded: a thumbnail uploaded as 4.0 over a stored 3.0 card.
+	out, action = contact.ApplyPhotoPolicy(mustParse(t, withPhoto4(jpegOf(t, 96, 96, 100, 90))), &big3, policy)
+	if action != contact.PhotoGuarded {
+		t.Fatalf("guard 3→4: action %q", action)
+	}
+
+	assertPhotoFits(t, "guard 3→4", out)
+
+	// And the other way: a 3.0 upload over a stored 4.0 card.
+	out, _ = contact.ApplyPhotoPolicy(mustParse(t, withPhoto(jpegOf(t, 96, 96, 100, 90))), &big4, policy)
+	assertPhotoFits(t, "guard 4→3", out)
+
+	// Scaled: a big 4.0 photo stays a data: URI.
+	out, action = contact.ApplyPhotoPolicy(mustParse(t, withPhoto4(jpegOf(t, 2000, 1000, 50, 90))), nil, policy)
+	if action != contact.PhotoScaled {
+		t.Fatalf("scale 4.0: action %q", action)
+	}
+
+	assertPhotoFits(t, "scale 4.0", out)
+
+	// Fitted: a card already broken (3.0 photo line in a 4.0 card) is
+	// repaired when written, even with nothing else to do.
+	broken := strings.Replace(withPhoto(jpegOf(t, 300, 300, 100, 90)), "VERSION:3.0", "VERSION:4.0", 1)
+
+	out, action = contact.ApplyPhotoPolicy(mustParse(t, broken), nil, policy)
+	if action != contact.PhotoFitted {
+		t.Fatalf("broken card: action %q", action)
+	}
+
+	assertPhotoFits(t, "fitted", out)
+
+	// A card already right is left byte for byte.
+	ok := withPhoto4(jpegOf(t, 300, 300, 100, 90))
+	if got := contact.FitBinary(mustParse(t, ok)).Encode(); string(got) != ok {
+		t.Fatal("FitBinary changed a 4.0 card that was already right")
+	}
+}
+
+// Restoring a photo from a 3.0 revision into a 4.0 card writes it as 4.0.
+func TestWithPhotoOfAcrossVersions(t *testing.T) {
+	t.Parallel()
+
+	old3 := mustParse(t, withPhoto(jpegOf(t, 300, 300, 100, 90)))
+	cur4 := mustParse(t, withPhoto4(jpegOf(t, 300, 300, 250, 90)))
+
+	assertPhotoFits(t, "3.0 photo into 4.0", contact.WithPhotoOf(cur4, old3))
+	assertPhotoFits(t, "4.0 photo into 3.0", contact.WithPhotoOf(old3, cur4))
+}
+
 func TestValidateErrors(t *testing.T) {
 	t.Parallel()
 
