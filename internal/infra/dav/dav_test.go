@@ -1,6 +1,11 @@
 package dav_test
 
 import (
+	"bytes"
+	"encoding/base64"
+	"image"
+	"image/color"
+	"image/jpeg"
 	"io"
 	"log/slog"
 	"net/http"
@@ -280,5 +285,73 @@ func TestWriteCardFitsPhotoToVersion(t *testing.T) {
 
 	if strings.Contains(body, "ENCODING=") {
 		t.Fatalf("4.0 card still has ENCODING:\n%s", body)
+	}
+}
+
+func jpegB64(t *testing.T, quality int) string {
+	t.Helper()
+
+	img := image.NewRGBA(image.Rect(0, 0, 300, 300))
+	for y := range 300 {
+		for x := range 300 {
+			img.Set(x, y, color.RGBA{R: uint8(x), G: uint8(y), B: 120, A: 255})
+		}
+	}
+
+	var buf bytes.Buffer
+	if err := jpeg.Encode(&buf, img, &jpeg.Options{Quality: quality}); err != nil {
+		t.Fatal(err)
+	}
+
+	return base64.StdEncoding.EncodeToString(buf.Bytes())
+}
+
+// DAVx5 uploads a card again after every download, with a new REV and the
+// photo re-encoded by Android. The server must keep the stored card and
+// answer with its ETag, or each sync adds a revision and starts the loop
+// over.
+func TestPutOnlyRevChangedKeepsStoredCard(t *testing.T) {
+	t.Parallel()
+
+	c := newClient(t)
+	obj := "/user/contacts/addressbook/loop.vcf"
+
+	card := func(rev, photo, fn string) string {
+		return "BEGIN:VCARD\r\nVERSION:3.0\r\nUID:loop\r\nFN:" + fn + "\r\n" +
+			"PHOTO;ENCODING=b;TYPE=JPEG:" + photo + "\r\nREV:" + rev + "\r\nEND:VCARD\r\n"
+	}
+
+	photo := jpegB64(t, 90)
+
+	st, hdr, body := c.do("PUT", obj, card("20261113T074711Z", photo, "Loop"), "If-None-Match", "*")
+	expect(t, "create", st, http.StatusCreated, body)
+
+	etag := hdr.Get("ETag")
+
+	// Same card, new REV, the same picture re-encoded.
+	st, hdr, body = c.do("PUT", obj, card("20261113T074719Z", jpegB64(t, 70), "Loop"), "If-Match", etag)
+	expect(t, "rev-only put", st, http.StatusNoContent, body)
+
+	if got := hdr.Get("ETag"); got != etag {
+		t.Fatalf("rev-only put: ETag %q, want the stored %q", got, etag)
+	}
+
+	st, hdr, body = c.do("GET", obj, "")
+	expect(t, "get", st, http.StatusOK, body)
+
+	if hdr.Get("ETag") != etag || !strings.Contains(body, "REV:20261113T074711Z") {
+		t.Fatalf("stored card changed:\n%s", body)
+	}
+
+	// A stale If-Match is still refused.
+	st, _, body = c.do("PUT", obj, card("20261113T074720Z", photo, "Loop"), "If-Match", `"0000000000000000000000000000000000000000"`)
+	expect(t, "stale if-match", st, http.StatusPreconditionFailed, body)
+
+	// A real edit is stored.
+	st, hdr, body = c.do("PUT", obj, card("20261113T074730Z", photo, "Loop Edited"), "If-Match", etag)
+	expect(t, "real edit", st, http.StatusNoContent, body)
+
+	if hdr.Get("ETag") == etag {
+		t.Fatal("a real edit kept the old ETag")
 	}
 }

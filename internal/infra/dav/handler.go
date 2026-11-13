@@ -626,6 +626,22 @@ func (h *Handler) servePut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if h.sameAsStored(res, stored, cond) {
+		// Nothing but REV changed (DAVx5 stamps a new one on every upload,
+		// and the photo policy has already put the stored photo back). A
+		// commit would be a new ETag without an ETag in the answer, so the
+		// phone would fetch the card, re-encode its photo, mark it dirty
+		// and upload it again: a loop that adds a revision per sync. Keep
+		// the stored card and answer with its ETag, so the phone takes
+		// its copy as current.
+		h.metrics.Write(string(res.home), "unchanged")
+		h.log.Info("write kept the stored card; only REV differed", "object", res.name)
+		w.Header().Set("ETag", `"`+res.obj.ETag+`"`)
+		w.WriteHeader(http.StatusNoContent)
+
+		return
+	}
+
 	etag, created, err := col.Put(res.name, stored, cond, requester(r))
 	if errors.Is(err, store.ErrWorktree) {
 		h.log.Warn("write committed; worktree not refreshed", "object", res.name, "error", err)
@@ -714,6 +730,32 @@ func (h *Handler) checkCard(w http.ResponseWriter, res *resource, body []byte) (
 	h.log.Info("photo policy applied", "object", res.name, "action", action)
 
 	return out.Encode(), true
+}
+
+// sameAsStored reports whether a card about to be written equals the
+// stored one apart from REV, for a write that targets the stored version
+// (a stale If-Match or If-None-Match: * still goes to the store and
+// fails there as it should).
+func (h *Handler) sameAsStored(res *resource, data []byte, cond store.Condition) bool {
+	if res.home != store.AddressBook || !res.exists || cond.IfNoneMatch {
+		return false
+	}
+
+	if cond.IfMatch != "" && cond.IfMatch != res.obj.ETag {
+		return false
+	}
+
+	prev := full(res.col, res.obj.ETag).card
+	if prev == nil {
+		return false
+	}
+
+	card, err := contact.Parse(data)
+	if err != nil {
+		return false
+	}
+
+	return contact.SameExceptRev(card, *prev)
 }
 
 func (h *Handler) checkEvent(w http.ResponseWriter, res *resource, body []byte) ([]byte, bool) {

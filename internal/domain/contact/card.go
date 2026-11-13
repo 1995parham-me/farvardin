@@ -6,6 +6,7 @@ package contact
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/1995parham-me/farvardin/internal/domain/vcf"
@@ -204,4 +205,58 @@ func (c Card) Clone() Card {
 	}
 
 	return out
+}
+
+// SameExceptRev reports whether a and b hold the same properties, line for
+// line, apart from REV, which a client stamps anew on every upload. Names
+// and parameter names are compared without case, and the base64 of a
+// binary value (PHOTO, LOGO, ...) without whitespace; other values exactly.
+func SameExceptRev(a, b Card) bool {
+	la, lb := withoutRev(a.Lines), withoutRev(b.Lines)
+	if len(la) != len(lb) {
+		return false
+	}
+
+	for i := range la {
+		if !sameLine(la[i], lb[i]) {
+			return false
+		}
+	}
+
+	return true
+}
+
+func withoutRev(lines []vcf.Line) []vcf.Line {
+	out := make([]vcf.Line, 0, len(lines))
+
+	for _, l := range lines {
+		if !strings.EqualFold(l.Name, "REV") {
+			out = append(out, l)
+		}
+	}
+
+	return out
+}
+
+func sameLine(a, b vcf.Line) bool {
+	if !strings.EqualFold(a.Group, b.Group) || !strings.EqualFold(a.Name, b.Name) || len(a.Params) != len(b.Params) {
+		return false
+	}
+
+	av, bv := a.Value, b.Value
+	if slices.Contains(binaryProps, strings.ToUpper(a.Name)) {
+		av, bv = strings.Map(dropSpace, av), strings.Map(dropSpace, bv)
+	}
+
+	if av != bv {
+		return false
+	}
+
+	for i := range a.Params {
+		if !strings.EqualFold(a.Params[i].Name, b.Params[i].Name) || !slices.Equal(a.Params[i].Values, b.Params[i].Values) {
+			return false
+		}
+	}
+
+	return true
 }

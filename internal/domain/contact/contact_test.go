@@ -391,3 +391,37 @@ func TestValidateWarnsOnPhotoInOtherVersionForm(t *testing.T) {
 		}
 	}
 }
+
+func TestSameExceptRev(t *testing.T) {
+	t.Parallel()
+
+	base := "BEGIN:VCARD\r\nVERSION:3.0\r\nUID:s\r\nFN:Ali Reza\r\nTEL;TYPE=cell:+15555550100\r\nREV:20261113T074711Z\r\nEND:VCARD\r\n"
+	a := mustParse(t, base)
+
+	cases := []struct {
+		what string
+		card string
+		same bool
+	}{
+		{"only REV", strings.Replace(base, "074711Z", "074719Z", 1), true},
+		{"no REV at all", strings.Replace(base, "REV:20261113T074711Z\r\n", "", 1), true},
+		{"space in a name", strings.Replace(base, "FN:Ali Reza", "FN:AliReza", 1), false},
+		{"phone type", strings.Replace(base, "TYPE=cell", "TYPE=home", 1), false},
+		{"new line", strings.Replace(base, "END:VCARD", "NOTE:x\r\nEND:VCARD", 1), false},
+	}
+
+	for _, c := range cases {
+		if got := contact.SameExceptRev(a, mustParse(t, c.card)); got != c.same {
+			t.Errorf("%s: SameExceptRev = %v, want %v", c.what, got, c.same)
+		}
+	}
+
+	// A photo folded differently is the same photo.
+	data := jpegOf(t, 64, 64, 100, 90)
+	p1 := mustParse(t, withPhoto(data))
+	p2 := mustParse(t, withPhoto(data[:40]+"\r\n "+data[40:]))
+
+	if !contact.SameExceptRev(p1, p2) {
+		t.Error("a refolded photo must compare equal")
+	}
+}
